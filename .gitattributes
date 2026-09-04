@@ -1,0 +1,12 @@
+# 一律用 LF 入 repo。
+# 唔講明嘅話 Windows 會 checkout 成 CRLF、Linux 上面嘅 GitHub Actions 又寫 LF，
+# 每次排程行完就會見到「成堆檔改晒」嘅假 diff。
+* text=auto eol=lf
+
+# 快照係機器生成，唔使 diff（睇 diff 都睇唔出乜，仲要好慢）
+public/data/*.json -diff linguist-generated
+
+# 二進位
+*.png binary
+*.ico binary
+*.woff2 binary

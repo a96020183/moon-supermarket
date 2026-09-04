@@ -1,0 +1,57 @@
+# 把 public/ 成個資料夾派上 GitHub Pages（用官方 actions/deploy-pages，唔使開多條 branch）。
+#
+# 開機前要做一次：GitHub 個 repo → Settings → Pages → Source 揀「GitHub Actions」。
+# 唔揀嘅話呢個 workflow 會喺 configure-pages 嗰步紅字話你知 Pages 未開。
+name: 派上 GitHub Pages
+
+on:
+  # 自己 push 改咗網頁本體 → 即刻重派
+  push:
+    branches: [main]
+    paths:
+      - 'public/**'
+      - '.github/workflows/pages.yml'
+  # Actions 頁面撳掣手動派
+  workflow_dispatch:
+  # 畀 refresh.yml 抓完新價之後叫佢
+  workflow_call:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    name: 派上 Pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 一次淨係准派一份，唔好兩份鬥快覆蓋對方。
+    concurrency:
+      group: pages-deploy
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: 攞返份 code
+        uses: actions/checkout@v4
+        with:
+          # 特登指名攞 branch 最新嗰版：refresh.yml 啱啱 push 咗新快照上嚟，
+          # 唔講明嘅話會攞返觸發嗰陣舊嗰個 commit，派出去就係舊價。
+          ref: ${{ github.ref_name }}
+
+      - name: 準備 Pages
+        uses: actions/configure-pages@v5
+
+      - name: 落個 .nojekyll，唔好畀 Jekyll 郁我哋啲檔
+        run: touch public/.nojekyll
+
+      - name: 打包 public/
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: 派出去
+        id: deploy
+        uses: actions/deploy-pages@v4

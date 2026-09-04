@@ -1,0 +1,9 @@
+{
+  "name": "hk-price-buddy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "惠康 / 百佳 網上超市比價小幫手（本機運行，零外部套件）",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" }
+}

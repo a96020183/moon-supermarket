@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFE7EF"/>
+      <stop offset="1" stop-color="#F0EAFE"/>
+    </linearGradient>
+    <linearGradient id="basket" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF9BBB"/>
+      <stop offset="1" stop-color="#E8467C"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- 手挽 -->
+  <path d="M186 214v-24a70 70 0 0 1 140 0v24" fill="none" stroke="#E8467C" stroke-width="26" stroke-linecap="round"/>
+  <!-- 籃身 -->
+  <path d="M118 216h276a20 20 0 0 1 19.9 22.4l-22 176A38 38 0 0 1 354 448H158a38 38 0 0 1-37.8-33.6l-22-176A20 20 0 0 1 118 216z" fill="url(#basket)"/>
+  <!-- 籃紋 -->
+  <g stroke="#fff" stroke-opacity=".55" stroke-width="13" stroke-linecap="round">
+    <path d="M186 270v112M256 270v112M326 270v112"/>
+    <path d="M130 300h252M138 360h236"/>
+  </g>
+  <!-- 心心 -->
+  <path d="M256 132c-10-16-38-14-45 6-6 17 10 33 45 55 35-22 51-38 45-55-7-20-35-22-45-6z" fill="#fff" fill-opacity=".92"/>
+</svg>

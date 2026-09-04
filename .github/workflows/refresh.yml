@@ -1,0 +1,130 @@
+# 每 6 個鐘去惠康同百佳抓一次價，砌份新快照放入 public/data/，
+# 有變就自動 commit 返上嚟，跟住即刻重新派上 GitHub Pages。
+#
+# 想即刻行一次唔使等：GitHub 個 repo → Actions → 揀「更新價錢快照」→ Run workflow。
+name: 更新價錢快照
+
+on:
+  schedule:
+    # UTC 時間 00 / 06 / 12 / 18 點，即係香港時間 08:00、14:00、20:00、02:00。
+    # 提提你：GitHub 規定 repo 連續 60 日冇人郁過，排程就會自動停。
+    # 停咗嘅話上去 Actions 撳一下「Enable workflow」就返生。
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      full:
+        description: '順便重爬百佳整份目錄（要成 40 分鐘）'
+        type: boolean
+        default: false
+      images:
+        description: '今次最多補幾多張惠康商品圖'
+        type: string
+        default: '1200'
+
+# 要寫返個 commit 入 repo，所以要 write。
+permissions:
+  contents: write
+
+# 同一時間淨係准行一單，唔好兩單撞埋一齊爭住 push。
+# cancel-in-progress 揀 false —— 抓到一半唔好斬佢，等佢做完。
+concurrency:
+  group: refresh-snapshot
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: 抓價 + 更新快照
+    runs-on: ubuntu-latest
+    # 百佳成兩百幾個細分類要慢慢行，畀夠鐘佢。
+    timeout-minutes: 120
+    outputs:
+      # 畀下面個 deploy job 睇：真係有嘢改先重新派 Pages
+      changed: ${{ steps.commit.outputs.changed }}
+    steps:
+      - name: 攞返份 code
+        uses: actions/checkout@v4
+
+      - name: 裝 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # 呢個 project 零外部套件，所以冇 npm install、冇 npm ci —— 唔使裝嘢，快好多。
+
+      # 惠康係主場，每次都重抓（22 個分類、10 分鐘左右）。
+      # 百佳成 225 個細分類要 40 分鐘，唔使咁密 —— 一日一次（UTC 18:00 = 香港凌晨 2 點）就夠。
+      # 上一次派出去嗰份 public/data/ 就係我哋嘅持久狀態：
+      # build-snapshot.js 開頭會由佢 seed 返 data/，所以 CI 冇 data/ 都唔會整散啲貨。
+      - name: 抓價錢、砌快照
+        env:
+          MANUAL_FULL: ${{ github.event.inputs.full }}
+          MANUAL_IMAGES: ${{ github.event.inputs.images }}
+        run: |
+          HOUR=$(date -u +%H)
+          ARGS="--images=${MANUAL_IMAGES:-1200}"
+          if [ "$HOUR" = "18" ] || [ "$MANUAL_FULL" = "true" ]; then
+            ARGS="$ARGS --refresh-pns"
+            echo "→ 今次連百佳整份目錄一齊重爬"
+          else
+            echo "→ 今次淨係更新惠康（百佳留返每日嗰次）"
+          fi
+          echo "node build-snapshot.js $ARGS"
+          node build-snapshot.js $ARGS
+
+      - name: 睇下砌咗啲乜
+        run: |
+          ls -la public/data
+          node -e "const m=require('./public/data/meta.json');console.log('惠康',m.counts.wellcome,'件 / 百佳',m.counts.parknshop,'件');"
+
+      - name: 有變就 commit + push
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A public/data
+
+          # --quiet 冇嘢改時回 0、有嘢改時回 1，所以擺喺 if 度啱啱好。
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "價錢同上次一模一樣 —— 唔使 commit，正常收工。"
+            exit 0
+          fi
+
+          git commit -m "自動更新價錢快照（$(date -u '+%Y-%m-%d %H:%M UTC')）"
+
+          # 萬一有人啱啱同時 push 咗嘢，攞返最新嘅 rebase 完再試多次。
+          # checkout 預設淨係攞一個 commit（shallow），咁樣 rebase 會搵唔到共同祖先，
+          # 所以撞車先至補攞返成段歷史 —— 平時唔使、快啲。
+          git push || {
+            echo "push 撞咗車（多數係啱啱有人 push 咗嘢），攞返最新嘅再試一次"
+            git fetch --unshallow origin 2>/dev/null || git fetch origin
+            git pull --rebase
+            git push
+          }
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: 喺 Actions 頁寫個摘要
+        if: always()
+        run: |
+          {
+            echo "### 🧺 價錢快照"
+            echo ""
+            if [ -f public/data/meta.json ]; then
+              node -e "const m=require('./public/data/meta.json');console.log('- 抓到時間（UTC）：'+new Date(m.builtAt).toISOString());console.log('- 惠康：'+m.counts.wellcome+' 件');console.log('- 百佳：'+m.counts.parknshop+' 件');"
+            else
+              echo "- ⚠️ 冇砌到 public/data/meta.json"
+            fi
+            echo "- 有冇 commit：${{ steps.commit.outputs.changed || 'false' }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # 快照真係有變 → 即刻重新派上 Pages。
+  # 點解要特登叫佢？因為機械人（GITHUB_TOKEN）push 嘅 commit 唔會自動觸發第二個 workflow，
+  # 淨係靠 pages.yml 個 push 觸發係唔會行嘅。
+  deploy:
+    name: 重新派上 Pages
+    needs: refresh
+    if: needs.refresh.outputs.changed == 'true'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml

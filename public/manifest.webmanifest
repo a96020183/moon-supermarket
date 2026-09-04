@@ -1,0 +1,17 @@
+{
+  "name": "買餸小幫手 · 惠康 × 百佳比價",
+  "short_name": "買餸小幫手",
+  "description": "喺 iPad 上面一次過睇晒惠康同百佳嘅價錢、重量、單價同有冇貨",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#FFF8F6",
+  "theme_color": "#FFF8F6",
+  "lang": "zh-HK",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

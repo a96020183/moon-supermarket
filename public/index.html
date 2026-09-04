@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-HK">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#FFF8F6">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="買餸小幫手">
+<title>買餸小幫手 · 惠康 × 百佳比價</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-row">
+    <div class="brand">
+      <span class="brand-mark">🧺</span>
+      <div>
+        <h1>買餸小幫手</h1>
+        <p class="brand-sub">惠康 × 百佳 · 邊間平啲一眼睇晒</p>
+      </div>
+    </div>
+    <button class="list-btn" id="openList" aria-label="打開購物清單">
+      <span class="list-btn-icon">🛍️</span>
+      <span class="list-badge" id="listBadge" hidden>0</span>
+    </button>
+  </div>
+
+  <div class="searchwrap">
+    <span class="search-icon">🔍</span>
+    <input id="search" type="search" enterkeyhint="search" autocomplete="off"
+           placeholder="搵嘢食、日用品… 中英文都得（milk / 牛奶）">
+    <button class="search-clear" id="searchClear" hidden aria-label="清除">✕</button>
+  </div>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab is-on" data-tab="find">搵嘢</button>
+    <button class="tab" data-tab="cats">分類</button>
+    <button class="tab" data-tab="favs">常買 <span class="tab-count" id="favCount"></span></button>
+    <button class="tab" data-tab="list">清單 <span class="tab-count" id="listCount"></span></button>
+  </nav>
+</header>
+
+<main id="main">
+
+  <!-- 搵嘢 -->
+  <section class="view is-on" id="view-find">
+    <div class="chips" id="quickChips"></div>
+
+    <div class="toolbar" id="toolbar" hidden>
+      <div class="seg" id="storeSeg">
+        <button class="seg-btn is-on" data-store="wellcome">惠康</button>
+        <button class="seg-btn" data-store="all">兩間都睇</button>
+        <button class="seg-btn" data-store="parknshop">百佳</button>
+      </div>
+      <div class="toolbar-row2">
+        <select id="sortSel" aria-label="排序">
+          <option value="relevance">最相關</option>
+          <option value="price">價錢最平</option>
+          <option value="unit">單價最抵（每 100 克）</option>
+          <option value="discount">折扣最勁</option>
+        </select>
+        <label class="switch"><input type="checkbox" id="stockOnly"><span>只睇有貨</span></label>
+        <label class="switch"><input type="checkbox" id="dealOnly"><span>只睇特價</span></label>
+        <label class="switch"><input type="checkbox" id="petOnly"><span>🐾 只睇寵物</span></label>
+      </div>
+    </div>
+
+    <div id="findStatus" class="status"></div>
+    <div class="grid" id="results"></div>
+    <div class="more-wrap"><button class="ghost-btn" id="moreFind" hidden>睇多啲 ↓</button></div>
+    <div class="empty" id="findEmpty">
+      <div class="empty-art">🍓</div>
+      <p class="empty-title">打個名，或者撳上面嘅熱門詞</p>
+      <p class="empty-sub">中英文都得 —— 打 <b>milk</b> 都會搵到「牛奶」</p>
+    </div>
+  </section>
+
+  <!-- 分類 -->
+  <section class="view" id="view-cats">
+    <div class="seg seg-wide" id="catStoreSeg">
+      <button class="seg-btn is-on" data-store="wellcome">惠康分類</button>
+      <button class="seg-btn" data-store="parknshop">百佳分類</button>
+    </div>
+    <div id="catList"></div>
+    <div id="catStatus" class="status"></div>
+    <div class="grid" id="catResults"></div>
+    <div class="more-wrap"><button class="ghost-btn" id="moreCat" hidden>睇多啲 ↓</button></div>
+  </section>
+
+  <!-- 常買 -->
+  <section class="view" id="view-favs">
+    <div class="section-head">
+      <h2>常買清單</h2>
+      <button class="ghost-btn" id="favAddAll">全部加入清單</button>
+    </div>
+    <div class="grid" id="favResults"></div>
+    <div class="empty" id="favEmpty">
+      <div class="empty-art">💗</div>
+      <p class="empty-title">仲未收藏過嘢</p>
+      <p class="empty-sub">見到成日買嘅嘢，撳個 ♡ 就會擺喺呢度，下次一撳就加返落清單</p>
+    </div>
+  </section>
+
+  <!-- 清單 -->
+  <section class="view" id="view-list">
+    <div class="section-head">
+      <h2>購物清單</h2>
+      <div class="head-actions">
+        <button class="ghost-btn" id="pasteOpen">✍️ 貼一段字</button>
+        <button class="ghost-btn" id="copyList">複製</button>
+        <button class="ghost-btn danger" id="clearList">清空</button>
+      </div>
+    </div>
+
+    <div class="totals" id="totals"></div>
+    <p class="note-line" id="listNote">行超市嗰陣，買咗就撳左邊個格仔剔走佢。<br>
+      顯示嘅係<b>網上超市價</b>，門市有機會唔同，當個參考就啱嘅。</p>
+    <div id="listItems"></div>
+
+    <div class="empty" id="listEmpty">
+      <div class="empty-art">🧺</div>
+      <p class="empty-title">清單仲係空嘅</p>
+      <p class="empty-sub">搵到啱嘅嘢撳 <b>＋</b> 就入咗清單 —— 唔使打字。<br>或者撳「✍️ 貼一段字」，成段清單一次過過晒嚟。</p>
+      <button class="primary-btn" id="pasteOpen2">✍️ 貼一段字入清單</button>
+    </div>
+
+    <div class="saved-lists" id="savedLists"></div>
+  </section>
+
+  <footer class="foot" id="foot"></footer>
+</main>
+
+<!-- 購物清單抽屜 -->
+<div class="sheet-backdrop" id="backdrop" hidden></div>
+
+<!-- 商品詳情 -->
+<aside class="sheet" id="itemSheet" hidden>
+  <div class="sheet-grip"></div>
+  <div class="sheet-body" id="itemSheetBody"></div>
+</aside>
+
+<!-- 貼文字入清單 -->
+<aside class="sheet" id="pasteSheet" hidden>
+  <div class="sheet-grip"></div>
+  <div class="sheet-body">
+    <h3 class="sheet-title">✍️ 貼一段字，我幫你逐樣搵</h3>
+    <p class="sheet-note">WhatsApp 收到嘅清單、腦入面諗到嘅嘢，一次過貼落嚟就得。<br>用逗號、頓號或者分行分開都得。</p>
+    <textarea id="pasteBox" rows="6" placeholder="牛奶 雞蛋 廁紙&#10;蕃茄, 洗頭水&#10;milk, bread"></textarea>
+    <div class="sheet-actions">
+      <button class="primary-btn" id="pasteGo">幫我搵晒佢</button>
+      <button class="ghost-btn" id="pasteClose">算數</button>
+    </div>
+    <div id="pasteResults"></div>
+  </div>
+</aside>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="search-core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

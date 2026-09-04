@@ -1,0 +1,41 @@
+# ── 唔好上 GitHub 嘅嘢 ───────────────────────────────────
+# 大原則：機器自己砌得返出嚟嘅、又肥又冇用嘅，一律唔上。
+
+# 網頁快取（隨時可以刪，成堆碎檔）
+data/cache/
+
+# 百佳本地索引 —— 成 9MB，而且行 rebuild-index.js 就有返
+data/pns-index.json
+
+# 惠康本地索引同商品圖對照 —— 行 build-snapshot.js 就有返，唔使上
+data/wc-index.json
+data/wc-images.json
+
+# 價格記錄 —— 呢個係你部機自己嘅歷史，唔關朋友事
+data/history.json
+
+# 試嘢用嘅臨時檔（呢個 project 一律用 _ 開頭做前綴）
+_*.js
+_*.json
+_*.txt
+_*.log
+_shot/
+public/_*.html
+
+# log
+*.log
+
+# Node（呢個 project 根本零套件，擺住做保險）
+node_modules/
+npm-debug.log*
+
+# 系統垃圾
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── ⚠️ 呢個一定要上 GitHub ──────────────────────────────
+# public/data/ 就係 GitHub Pages 版嘅價錢快照，冇咗佢個網頁乜都出唔到。
+# 上面啲規則本身唔會擋佢，呢兩行係寫嚟提你唔好手快加咗 data/ 落去 ignore。
+!public/data/
+!public/data/*.json
