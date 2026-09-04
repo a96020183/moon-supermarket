@@ -44,7 +44,9 @@
     ['糙米', [], ['brown rice']],
     ['意粉', ['意大利粉'], ['pasta', 'spaghetti']],
     ['麵', ['麵條'], ['noodle', 'noodles']],
-    ['公仔麵', ['即食麵', '出前一丁'], ['instant noodle', 'instant noodles', 'ramen']],
+    ['公仔麵', ['即食麵'], ['instant noodle', 'instant noodles', 'ramen']],
+    // 出前一丁／維他／卡樂b 呢啲係**品牌**，搵佢就係要嗰個牌子，唔可以當品類同義詞
+    ['出前一丁', [], ['nissin demae']],
     ['米粉', ['米線'], ['rice noodle', 'vermicelli']],
     ['麵粉', [], ['flour']],
     ['食油', ['油'], ['oil', 'cooking oil']],
@@ -68,7 +70,8 @@
     ['豬肉', ['豬'], ['pork']],
     ['牛肉', ['牛'], ['beef']],
     ['雞肉', ['雞'], ['chicken']],
-    ['雞胸', ['雞柳'], ['chicken breast']],
+    ['雞胸', [], ['chicken breast']],
+    ['雞柳', [], ['chicken tenderloin']],   // 同雞胸係兩件嘢，唔可以當同義詞
     ['雞翼', [], ['chicken wing', 'chicken wings']],
     ['羊肉', [], ['lamb', 'mutton']],
     ['免治肉', ['碎肉'], ['minced meat', 'ground meat']],
@@ -283,6 +286,47 @@
       .trim();
   }
 
+  /* 破折號後面嗰截多數係口味／版本備註，唔係中心詞：
+   *   「薯片 - 芝士」「天然酵母包-芝士」「藍鑽石杏仁樂-原味」「公仔 點心麵－海鮮」
+   * 唔剝走佢，「薯片 - 芝士」個淨名就變咗以「芝士」收尾，扮到自己係芝士，
+   * 搵「芝士」仲要排第一。全庫有 922 件係咁。
+   *
+   * 剝得好保守，三重閘：後面嗰截要短（1-5 個字）、要有中文、
+   * 而且破折號前面要係中文或者空格 —— 咁「Coca-Cola」「和牛SB4-5」
+   * 「花竹蝦3-5隻」「V-切薯片」呢啲就唔會畀人斬錯。
+   */
+  function stripNoteTail(s) {
+    const m = /^(.{2,})[-–—－]\s*([^-–—－]{1,5})$/.exec(s);   // 貪心 → 對正最後一個破折號
+    if (!m) return s;
+    const before = m[1];
+    if (!CJK.test(m[2])) return s;                 // 尾巴冇中文（Cola、SB4-5）→ 唔郁
+    if (!/[一-鿿\s]$/.test(before)) return s;       // 破折號黐住英數（V-切薯片）→ 唔郁
+    const kept = before.trim();
+    return kept.length >= 2 ? kept : s;
+  }
+
+  /**
+   * 由**原始**商品名整出淨名。搜尋嗰邊一律用呢個，唔好自己 headName(norm(name))。
+   *
+   * 點解要行兩次：norm 會把括號當標點換做空格，所以一 norm 完，
+   * 「(包裝及品牌隨機發放)」就變咗個名嘅一部分，headName 想剝都剝唔到
+   *  —— 全庫 26,787 件貨入面有 6,790 件（四分一）中招，
+   *     「免治牛肉 280GM(新舊包裝除機發放)」個淨名變成「免治牛肉 新舊包裝除機發放」，
+   *     搵「牛肉」就攞唔到「中心詞喺名尾」嗰 40 分，好貨沉底。
+   * 所以：先剝括號（趁佢仲喺度）→ norm（全形轉半形，「２５０Ｇ」先變到「250g」）
+   *      → 再剝一次規格尾巴。
+   */
+  function cleanHead(s) {
+    return headName(norm(stripNoteTail(headName(s))));
+  }
+
+  /* 淨名嘅「未修圖版」：只去規格尾巴，唔剝括號、唔剝口味。
+     用嚟分辨「個名本身就係嗰樣嘢」同「剝走備註之後先啱啱好一樣」——
+     後者唔應該攞到 exact-head 嗰 25 分。 */
+  function headRawOf(s) {
+    return headName(norm(s));
+  }
+
   /* 寵物分類：百佳 08 開頭，惠康「貓貓專區 / 狗狗專區」。
    *
    * 寵物糧個名尾好興叫「三文魚」「雞胸」，搵買餸嘢嗰陣佢哋會霸晒頭位。
@@ -294,9 +338,20 @@
   const PET_WORD = /貓|狗|寵物|毛孩|cat\b|dog\b|pet\b|kitten|puppy/i;
   const PET_DEMOTE = 45;
 
-  const isPetCat = (catId) => {
-    const c = String(catId || '');
-    return !!c && (PET_CAT.test(c) || PET_CAT_WC.has(c));
+  /* 惠康件貨嘅 catId 而家記嘅係**葉分類**（例如貓貓專區底下嘅「貓乾糧」），
+     唔再係嗰 22 個頂層，所以要連 topId 一齊睇先認得返係咪寵物嘢。
+     舊 call 法（淨傳一個 catId）照舊行得通。 */
+  /* 一件貨可以同時屬幾個分類（原箱貓乾糧＝「原箱優惠」＋「貓貓專區」）。
+     所以「係咪寵物貨」要睇**任何一個**身份，唔可以淨係睇主分類 ——
+     主分類邊個認領到係睇爬蟲次序，靠佢判斷嘅話原箱寵物貨會甩晒 🐾。
+     catId / topId 收單一值或者陣列都得。 */
+  const isPetCat = (catId, topId) => {
+    const one = (v) => {
+      const c = String(v || '');
+      return !!c && (PET_CAT.test(c) || PET_CAT_WC.has(c));
+    };
+    const any = (v) => (Array.isArray(v) ? v.some(one) : one(v));
+    return any(catId) || any(topId);
   };
 
   /** 呢個搜尋本身係咪搵緊寵物嘢 */
@@ -305,17 +360,91 @@
     return (terms || []).some((t) => PET_WORD.test(t));
   }
 
+  /* ---------- 查詢切詞 ---------- */
+
+  /* 詞庫入面所有「兩個字或以上」嘅中文詞，淨係攞嚟切查詢。
+   * 單字（「奶」「蛋」）**故意唔放**入嚟 —— 一切開就會夾中「奶瓶刷」「蛋卷」。 */
+  const DICT_WORDS = new Set();
+  for (const [zh, zhAlt] of RAW) {
+    for (const w of [zh, ...zhAlt]) if (hasCJK(w) && w.length >= 2) DICT_WORDS.add(w);
+  }
+  let MAX_WORD = 2;
+  for (const w of DICT_WORDS) if (w.length > MAX_WORD) MAX_WORD = w.length;
+
+  /* 同一句查詢要對成萬件貨計分，切詞行一次就夠 */
+  const TOK_CACHE = new Map();
+
   /**
-   * 一件貨對一組字詞有幾夾。三個重點：
-   *  1. 中心詞係咪喺個名尾（「全脂牛奶」係奶、「牛奶朱古力」係朱古力）
-   *  2. 命中詞佔個名幾多（避免「雞蛋」夾到「雞蛋饅頭」）
-   *  3. 分類有冇對得上（「蛋類」就真係蛋）
+   * 把查詢切做字詞（之後要求**全部**都出現，唔理次序）。
+   *  - 空格：照拆　　'meadows 芝士' → ['meadows', '芝士']
+   *  - 中文：用詞庫由長到短貪心切　'芝士碎' → ['芝士', '碎']
+   *  - 詞庫夾唔中嘅連續字併埋做一個詞，唔會拆散　'馬蘇里拉' → ['馬蘇里拉']
+   *
+   * 咁「芝士碎」同「碎芝士」切出嚟就係同一組詞，兩個都搵到「…碎芝士150GM」。
+   * 切詞只會**加**命中，唔會減：原本連住出現嘅名，梗係包含晒每個詞。
+   */
+  function tokenize(phrase) {
+    const p = String(phrase || '');
+    const cached = TOK_CACHE.get(p);
+    if (cached) return cached;
+    const out = [];
+    for (const chunk of p.split(/\s+/)) {
+      if (!chunk) continue;
+      let i = 0;
+      let buf = '';                                   // 詞庫夾唔中、暫時攢住嘅字
+      while (i < chunk.length) {
+        let hit = '';
+        const room = Math.min(MAX_WORD, chunk.length - i);
+        for (let n = room; n >= 2; n--) {
+          const w = chunk.substr(i, n);
+          if (DICT_WORDS.has(w)) { hit = w; break; }
+        }
+        if (hit) {
+          if (buf) { out.push(buf); buf = ''; }
+          out.push(hit);
+          i += hit.length;
+        } else {
+          buf += chunk[i];
+          i++;
+        }
+      }
+      if (buf) out.push(buf);
+    }
+    const uniq = [...new Set(out)];
+    const res = uniq.length ? uniq : (p.trim() ? [p.trim()] : []);
+    if (TOK_CACHE.size < 4000) TOK_CACHE.set(p, res);
+    return res;
+  }
+
+  /* 短名獎勵。slack = 「淨名」入面有幾多個字係多餘（唔關命中詞事）。
+   *
+   * 舊版係 `命中長度 / 成個名長度 × 25` —— 即係**名愈長分愈低**，一路跌到 23 分咁多，
+   * 長商品名（有品牌、有規格、有描述）永遠打唔贏短名，係設計缺陷：
+   * 「Meadows車打及馬蘇里拉碎芝士150GM」搵「芝士」排到 57 名。
+   *
+   * 而家淨係分兩級，唔再按字數逐格排隊：
+   *   淨名基本上就係搵緊嗰樣嘢（「車打芝士」「全脂牛奶」）→ 加 5 分；
+   *   其餘一律平手 —— 邊個牌子、個名幾多字、寫幾多描述都唔會有影響，
+   *   同分就交返畀價錢排（本身就係格價 app，平嘅行先啱）。 */
+  const SHORT_NAME_SLACK = 3;
+  function lengthBonus(slack) {
+    return slack <= SHORT_NAME_SLACK ? 5 : 0;
+  }
+
+  /**
+   * 一件貨對一組字詞有幾夾。重點：
+   *  1. 查詢切開字詞之後，**全部詞都要出現**（唔理次序）先叫命中
+   *  2. 中心詞係咪喺個名尾（「全脂牛奶」係奶、「牛奶朱古力」係朱古力）
+   *  3. 整串詞原封不動連住出現＝更穩（「碎芝士」贏過散開嗰啲）
+   *  4. 淨名有幾多字係多餘（輕微，最多爭 5 分）
+   *  5. 分類有冇對得上（「蛋類」就真係蛋）
    * 另外：唔係搵寵物嘢就大幅扣寵物糧嘅分。
    *
    * headSrc = 用嚟判斷中心詞嗰個字串。**一定要淨係商品名**，
    * 唔可以連品牌一齊擺 —— 「全脂牛奶 屈臣氏」尾巴變咗品牌，中心詞就認唔到。
    * 唔傳就當同 nameNorm 一樣。
-   * opts 可以係 catId 字串，或者 {catId, includePets}；includePets = true 就完全唔扣寵物分。
+   * opts 可以係 catId 字串，或者 {catId, topId, includePets}；
+   * includePets = true 就完全唔扣寵物分；topId = 惠康嗰件貨屬邊個頂層分類。
    */
   function scoreItem(nameNorm, catNorm, terms, qn, headSrc, opts) {
     const o = typeof opts === 'string' || opts == null ? { catId: opts } : opts;
@@ -325,24 +454,43 @@
     let best = 0;
     for (const t of terms) {
       if (!t) continue;
-      const i = nameNorm.indexOf(t);
-      // 分類要整個詞夾中先算數；用單字會鬆到「洗頭水」夾中「水果」
-      const inCat = catNorm ? catNorm.indexOf(t) >= 0 : false;
-      if (i < 0 && !inCat) continue;
-      let sc = 0;
-      if (i >= 0) {
-        sc += 45;
-        if (head.length >= t.length && head.slice(-t.length) === t) sc += 40;
-        sc += Math.round((t.length / Math.max(t.length, nameNorm.length)) * 25);
-        if (t === qn) sc += 10;
-        if (head === t) sc += 25;
+      const toks = tokenize(t);
+      if (!toks.length) continue;
+
+      let inName = true;
+      /* 分類要**成個詞原封不動**夾中先算數，唔可以逐個 token 夾。
+         逐個 token 嘅話「米麵粉」拆成「米」+「麵粉」，成條「罐頭、湯及即食品」
+         aisle 會一次過傾晒出嚟 —— 分類本來係要收窄，唔係放寬。 */
+      const inCat = !!catNorm && catNorm.indexOf(t) >= 0;
+      let tail = false;      // 有冇一個詞企喺淨名個尾（＝中心詞）
+      let cover = 0;         // 命中嘅詞總共佔幾多個字
+      for (const w of toks) {
+        if (inName && nameNorm.indexOf(w) < 0) inName = false;
+        if (!tail && head.length >= w.length && head.slice(-w.length) === w) tail = true;
+        cover += w.length;
       }
-      if (inCat) sc += i >= 0 ? 28 : 20;
+      if (!inName && !inCat) continue;
+
+      let sc = 0;
+      if (inName) {
+        sc += 45;
+        if (tail) sc += 40;
+        // 多詞查詢散開喺個名度都算命中，但連住出現梗係更加夾
+        if (toks.length > 1 && nameNorm.indexOf(t) >= 0) sc += 12;
+        sc += lengthBonus(head.length - cover);
+        if (t === qn) sc += 10;
+        /* 「個名就係嗰樣嘢」先加呢 25 分 —— 而且要**未剝過嘢**就已經係。
+           剝走括號同口味尾巴之後先變到「剛剛好一樣」嗰啲唔算數：
+           百佳「即食麵-日式豚骨味」「洗衣液（尤加利）」剝完就係「即食麵」「洗衣液」，
+           會拎滿分打贏真正嘅「出前一丁」同平價洗衣液 —— 實測過，好離譜。 */
+        if (head === t && (o.headRaw == null || o.headRaw === t)) sc += 25;
+      }
+      if (inCat) sc += inName ? 28 : 20;
       if (sc > best) best = sc;
     }
     // 佢會買新鮮雞胸／三文魚返去煮俾貓狗食，所以新鮮食材要行先；
     // 但寵物貨唔會消失，只係排喺後面少少，隨時撳一下就睇返晒。
-    if (best && !o.includePets && isPetCat(o.catId) && !isPetQuery(terms, qn)) {
+    if (best && !o.includePets && isPetCat(o.catId, o.topId) && !isPetQuery(terms, qn)) {
       best = Math.max(1, best - PET_DEMOTE);
     }
     return best;
@@ -354,5 +502,5 @@
     '三文魚', '蕃茄', '香蕉', '雪糕', '薯片', '可樂', '洗衣液', '洗潔精',
   ];
 
-  return { RAW, synonyms, expandQuery, norm, headName, scoreItem, hasCJK, POPULAR, isPetCat, isPetQuery };
+  return { RAW, synonyms, expandQuery, norm, headName, headRawOf, cleanHead, tokenize, scoreItem, hasCJK, POPULAR, isPetCat, isPetQuery };
 }));

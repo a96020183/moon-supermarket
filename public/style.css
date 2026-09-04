@@ -134,8 +134,28 @@ main { padding: 16px 16px 120px; max-width: 1180px; margin: 0 auto; }
   transition: transform .14s;
 }
 .chip:active { transform: scale(.94); }
-.chip.recent { background: var(--lilac-soft); }
 .chip-label { font-size: 12px; color: var(--ink-soft); width: 100%; margin: 2px 0 -2px; font-weight: 700; }
+
+/* 「頭先搵過」：左邊撳字再搵一次，右邊 ✕ 剷走。
+   兩橛各有各嘅點擊區，中間有條線分開，唔會撳錯。 */
+.chip.recent {
+  background: var(--lilac-soft); padding: 0; overflow: hidden;
+  display: inline-flex; align-items: stretch;
+}
+.chip-go { padding: 9px 11px 9px 15px; font-size: 14.5px; font-weight: 650; color: inherit; }
+.chip-x {
+  /* ✕ 係破壞性動作，點擊區唔可以細過 ♡（45px）。
+     視覺上維持細細哋，靠 ::after 向外撐開個掂得到嘅範圍。 */
+  position: relative;
+  width: 40px; min-height: 44px; display: grid; place-items: center;
+  font-size: 12px; color: var(--ink-soft); border-left: 1px solid rgba(122,96,178,.2);
+}
+.chip-x::after { content: ''; position: absolute; inset: -3px -4px; }
+.chip-x:active { background: rgba(122,96,178,.18); color: var(--ink); }
+.chip.chip-clear {
+  background: transparent; box-shadow: none; color: var(--ink-soft);
+  font-size: 13.5px; font-weight: 650; text-decoration: underline; text-underline-offset: 3px;
+}
 
 /* ---------- 工具列 ---------- */
 
@@ -198,9 +218,14 @@ main { padding: 16px 16px 120px; max-width: 1180px; margin: 0 auto; }
 .fav-btn {
   position: absolute; top: 7px; right: 7px; width: 36px; height: 36px; border-radius: 13px;
   background: rgba(255,255,255,.92); display: grid; place-items: center; font-size: 17px;
-  box-shadow: 0 2px 8px rgba(0,0,0,.1);
+  box-shadow: 0 2px 8px rgba(0,0,0,.1); z-index: 2; transition: transform .14s;
 }
-.fav-btn.on { background: var(--pink-deep); }
+/* 睇落係 36px，但手指嘅點擊區撐到 46px —— iPhone 上面 36 真係細得滯。
+   撐出嚟嗰 5px 仲喺 .card-img 入面，唔會蓋到隔籬張卡。 */
+.fav-btn::after { content: ''; position: absolute; inset: -5px; border-radius: 16px; }
+.fav-btn:active { transform: scale(.86); }
+.fav-btn.on { background: var(--pink-deep); animation: favpop .32s cubic-bezier(.2,.9,.3,1); }
+@keyframes favpop { 0% { transform: scale(.66); } 55% { transform: scale(1.24); } 100% { transform: scale(1); } }
 
 .out-tag {
   position: absolute; inset: auto 0 0; background: rgba(74,58,66,.78); color: #fff;
@@ -335,6 +360,18 @@ main { padding: 16px 16px 120px; max-width: 1180px; margin: 0 auto; }
 .li-img { width: 54px; height: 54px; flex: none; border-radius: 14px; background: #FFF3F7; display: grid; place-items: center; overflow: hidden; }
 .li-img img { width: 100%; height: 100%; object-fit: contain; padding: 4px; }
 .li-main { flex: 1; min-width: 0; }
+
+/* 窄機（iPhone）行度擺唔落咁多嘢：tick + 相 + 名 + 數量 + 價 + ✕ 一行排，
+   個名會畀擠到得 60px 闊、斷成三行。窄過 480px 就摺成兩行 —— 名一行，操作一行。 */
+@media (max-width: 480px) {
+  .li { flex-wrap: wrap; gap: 10px; }
+  .li-main { flex: 1 1 100%; order: 2; min-width: 0; }
+  .tick { order: 1; }
+  .li-img { order: 1; }
+  .qty { order: 3; margin-left: auto; }
+  .li-price { order: 4; }
+  .li-del { order: 5; }
+}
 .li-name { font-size: 14px; font-weight: 650; line-height: 1.35; }
 .li-sub { font-size: 12px; color: var(--ink-soft); margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .li-price { font-weight: 800; color: var(--pink-deep); font-size: 16px; white-space: nowrap; }
@@ -394,6 +431,9 @@ main { padding: 16px 16px 120px; max-width: 1180px; margin: 0 auto; }
   background: var(--ink); color: #fff; padding: 12px 20px; border-radius: 16px;
   font-size: 14.5px; font-weight: 650; z-index: 90; box-shadow: var(--shadow-lg);
   animation: pop .25s cubic-bezier(.2,.9,.3,1); max-width: 88vw; text-align: center;
+  /* toast 純粹話你知，唔好搶走人哋個撳。佢 fixed 喺底部又 z-index 90，
+     冇呢行就會食咗下面卡片個 ♡ —— 撳完一件貨之後兩秒內都撳唔到隔籬嗰件。 */
+  pointer-events: none;
 }
 @keyframes pop { from { opacity: 0; transform: translate(-50%, 14px); } }
 

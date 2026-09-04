@@ -302,10 +302,15 @@ if (base) {
       for (const rec of b.top) {
         const nameNorm = core.norm(`${rec.name} ${rec.brand || ''}`);
         const catNorm = core.norm((rec.categoryPath || []).join(' '));
-        // 一定要同 production 一模一樣咁 call —— 少傳一個參數，呢條安全網就係假嘅
+        // 一定要同 production 一模一樣咁 call —— 少傳一個參數，呢條安全網就係假嘅。
+        // 淨名要行 cleanHead（由原始個名度整），同 lib-index / app.js 一致。
         const headNorm = core.norm(rec.name);
-        const now = core.scoreItem(nameNorm, catNorm, terms, qn, headNorm,
-          { catId: rec.catId || '', head: core.headName(headNorm) });
+        const now = core.scoreItem(nameNorm, catNorm, terms, qn, headNorm, {
+          catId: rec.catId || '',
+          topId: rec.topId || '',
+          head: core.cleanHead(rec.name),
+          headRaw: core.headRawOf(rec.name),   // 少傳呢個，exact-head 就會判錯
+        });
         if (now !== rec.rel) {
           throw new Error(`「${q}」→ ${rec.sku}（${rec.name}）重構前 ${rec.rel} 分，而家 ${now} 分`);
         }
@@ -357,8 +362,9 @@ function scoreOf(name, { cat = '', catId = '', brand = '', q } = {}) {
   const terms = [...new Set(core.synonyms(q).map(core.norm).filter(Boolean))];
   const nameNorm = core.norm(`${name} ${brand}`);
   const headNorm = core.norm(name);
+  // 同 production 一樣行 cleanHead（由原始個名度整淨名）
   return core.scoreItem(nameNorm, core.norm(cat), terms, core.norm(q), headNorm,
-    { catId, head: core.headName(headNorm) });
+    { catId, head: core.cleanHead(name) });
 }
 
 t('中心詞喺名尾：「全脂牛奶」要贏「牛奶朱古力」', () => {
@@ -411,6 +417,173 @@ t('惠康係主場：分類清單第一個係惠康，而且 22 個分類齊', (
   const S = require('./lib-stores.js');
   eq(S.wellcome.CATEGORIES.length, 22, '惠康分類數');
   ok(S.wellcome.CATEGORIES.every((c) => c.id && c.name && c.icon), '每個分類要有 id / 名 / icon');
+});
+
+/* ---- §6b 多詞查詢 + 淨名（2026-09 修返「搵到嘅貨唔啱」） ---- */
+
+const TARGET = 'Meadows車打及馬蘇里拉碎芝士150GM';   // sku 114344291，$28
+
+t('切詞：「芝士碎」同「碎芝士」切出同一組詞', () => {
+  eq(core.tokenize('芝士碎').slice().sort(), ['碎', '芝士']);
+  eq(core.tokenize('碎芝士').slice().sort(), ['碎', '芝士']);
+});
+
+t('切詞：詞庫夾唔中嘅字唔會拆散', () => {
+  eq(core.tokenize('馬蘇里拉'), ['馬蘇里拉'], '拆散咗就會夾中任何有呢四個字嘅嘢');
+  eq(core.tokenize('卡樂b 薯片'), ['卡樂b', '薯片']);
+  eq(core.tokenize('meadows 芝士'), ['meadows', '芝士']);
+});
+
+t('切詞唔可以拆散詞庫入面嘅詞（拆咗「牛奶」就會夾中奶瓶刷）', () => {
+  eq(core.tokenize('牛奶'), ['牛奶']);
+  eq(core.tokenize('全脂牛奶'), ['全脂牛奶']);
+  eq(core.tokenize('洗頭水'), ['洗頭水']);
+  eq(core.tokenize('雞蛋'), ['雞蛋']);
+});
+
+t('多詞查詢：「芝士碎」搵得到「…碎芝士150GM」（次序唔拘）', () => {
+  const s = scoreOf(TARGET, { catId: '100007', q: '芝士碎' });
+  gt(s, 0, '重構前係 0 分 —— 因為要求成串字連住出現');
+});
+
+t('多詞查詢：「Meadows 芝士」要兩個詞都喺先算命中', () => {
+  gt(scoreOf(TARGET, { catId: '100007', q: 'Meadows 芝士' }), 0);
+  eq(scoreOf('紫堡牌忌廉芝士 200GM', { q: 'Meadows 芝士' }), 0, '冇 Meadows 就唔算命中');
+  eq(scoreOf('Meadows碎粒蕃茄 390GM', { q: 'Meadows 芝士' }), 0, '冇芝士就唔算命中');
+});
+
+t('連住出現嘅贏散開嘅：「碎芝士」＞「芝士碎」（同一件貨）', () => {
+  const joined = scoreOf(TARGET, { catId: '100007', q: '碎芝士' });
+  const split = scoreOf(TARGET, { catId: '100007', q: '芝士碎' });
+  gt(joined, split, `原封不動連住 ${joined} 分 vs 散開 ${split} 分`);
+});
+
+t('個名長唔可以再沉底：長名同短名爭唔到幾多分', () => {
+  const short = scoreOf('車打芝士', { q: '芝士' });
+  const long = scoreOf(TARGET, { catId: '100007', q: '芝士' });
+  gt(short, 0); gt(long, 0);
+  gt(short, long, '短名仲係應該有少少優勢');
+  ok(short - long <= 10, `爭咗 ${short - long} 分，太多 —— 舊版就係咁令長名永遠打唔贏`);
+});
+
+t('cleanHead 由原始個名整淨名：括號備註要剝走', () => {
+  // norm 會把括號當標點換做空格，所以一定要喺 norm 之前剝
+  eq(core.cleanHead('免治牛肉 280GM(新舊包裝除機發放)'), '免治牛肉');
+  eq(core.cleanHead('挪威 有皮三文魚柳2PC 240GM (包裝及品牌隨機發放)'), '挪威 有皮三文魚柳');
+  eq(core.cleanHead('必品閣 CJ 手握飯糰(泡菜芝士) 210G'), '必品閣 cj 手握飯糰');
+});
+
+t('cleanHead 全形規格都剝到（要 norm 咗先剝得到）', () => {
+  eq(core.cleanHead('ＶＡＮＩＴＹ盒裝蕃茄２５０Ｇ'), 'vanity盒裝蕃茄');
+});
+
+t('cleanHead 剝走破折號後面嘅口味備註', () => {
+  eq(core.cleanHead('薯片 - 芝士(新舊包裝隨機發貨)'), '薯片');
+  eq(core.cleanHead('天然酵母包-芝士'), '天然酵母包');
+  eq(core.cleanHead('藍鑽石杏仁樂-原味 946ML'), '藍鑽石杏仁樂');
+  eq(core.cleanHead('公仔 點心麵－海鮮 34GM'), '公仔 點心麵');
+});
+
+t('cleanHead 唔會斬錯正常個名（三重閘）', () => {
+  eq(core.cleanHead('Coca-Cola'), 'coca cola', '尾巴冇中文 → 唔郁');
+  eq(core.cleanHead('MEADOWS 台灣烤腸味V-切薯片 60 GM'), 'meadows 台灣烤腸味v 切薯片', '破折號黐住英文字母 → 唔郁');
+  eq(core.cleanHead('EG-PRO奧米加6鮮雞蛋 330GM'), 'eg pro奧米加6鮮雞蛋', '尾巴太長 → 唔郁');
+});
+
+t('括號備註剝走之後，中心詞認得返（呢個係 25% 貨品嘅問題）', () => {
+  const fixed = scoreOf('免治牛肉 280GM(新舊包裝除機發放)', { q: '牛肉' });
+  const plain = scoreOf('免治牛肉 280GM', { q: '牛肉' });
+  eq(fixed, plain, '有冇括號備註都應該計到同一個分');
+});
+
+t('「薯片 - 芝士」唔可以扮芝士', () => {
+  const chips = scoreOf('薯片 - 芝士(新舊包裝隨機發貨)', { q: '芝士' });
+  const real = scoreOf('車打芝士', { q: '芝士' });
+  gt(real, chips, `真芝士 ${real} 分 vs 薯片 ${chips} 分`);
+});
+
+/* ---------------- 6. 惠康分類樹（子分類 = 覆蓋率） ---------------- */
+group('6. 惠康分類樹（子分類 = 覆蓋率）');
+
+/* 分類樹兩個地方都揾得到：data/wc-categories.json（爬蟲攞返嚟嗰份快取）
+   同 public/data/meta.json（真係派出去嗰份）。CI 度 data/ 未必有，
+   所以邊度有就用邊度，兩度都冇先算佢唔過。 */
+const wcTree = (() => {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'wc-categories.json'), 'utf8'));
+    if (Array.isArray(j.tree) && j.tree.length) return j.tree;
+  } catch { /* 落去試快照 */ }
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(__dirname, 'public', 'data', 'meta.json'), 'utf8'));
+    const w = m.categories && m.categories.wellcome;
+    if (Array.isArray(w) && w.some((c) => (c.children || []).length)) return w;
+  } catch { /* 冇就冇 */ }
+  return null;
+})();
+
+t('攞得返惠康完整分類樹（22 個頂層各有子分類）', () => {
+  ok(wcTree, '搵唔到分類樹 —— 行 node build-snapshot.js（佢會由首頁 __NUXT__ 攞）');
+  eq(wcTree.length, 22, '頂層分類數');
+  const withKids = wcTree.filter((c) => (c.children || []).length).length;
+  gt(withKids, 18, `淨係 ${withKids} 個頂層有子分類，太少 —— 個 cascaderData 可能拆錯咗`);
+});
+
+if (wcTree) {
+  t('每個葉分類都帶住 topId（22 個頂層導航先唔會爛）', () => {
+    const S = require('./lib-stores.js');
+    const leaves = S.wellcome.leafCategories(wcTree);
+    gt(leaves.length, 400, `淨係 ${leaves.length} 個葉分類，太少`);
+    const tops = new Set(wcTree.map((c) => String(c.id)));
+    for (const l of leaves) {
+      ok(l.id && l.name, `葉分類冇 id／名：${JSON.stringify(l)}`);
+      ok(tops.has(String(l.topId)), `葉分類「${l.name}」個 topId ${l.topId} 唔喺 22 個頂層入面`);
+    }
+    eq(new Set(leaves.map((l) => l.id)).size, leaves.length, '葉分類 id 唔應該有重複');
+  });
+
+  t('頂層 id 同 CATEGORIES 嗰 22 個完全對得返', () => {
+    const S = require('./lib-stores.js');
+    const ids = new Set(wcTree.map((c) => String(c.id)));
+    for (const c of S.wellcome.CATEGORIES) ok(ids.has(String(c.id)), `分類樹入面搵唔到「${c.name}」（${c.id}）`);
+  });
+}
+
+t('crawlWellcome 爬葉分類，而且收晒所有分類身份（淨係睇 code）', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'build-snapshot.js'), 'utf8');
+  ok(/leafCategories/.test(src), 'crawlWellcome 應該行 leafCategories，唔係淨爬 22 個頂層');
+  // 一件貨可以同時屬幾個分類。淨係記一個 catId 會令分類瀏覽報少貨
+  // （實測「廚具及餐桌用品」官網 232 件、app 只出 157 件），所以要 catIds/topIds。
+  ok(/catIds\.add/.test(src), '爬蟲冇收集所有 catIds —— 分類瀏覽會漏貨');
+  ok(/topIds\.add/.test(src), '爬蟲冇收集所有 topIds');
+  ok(/catId:\s*old && old\.catId/.test(src), '主分類應該係「邊個先認領就係邊個」，唔可以畀後爬嘅覆蓋');
+});
+
+t('抓取失敗會出聲，唔會當成「呢個分類冇貨」（淨係睇 code）', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'build-snapshot.js'), 'utf8');
+  ok(/attempt <= 3/.test(src), '爬蟲冇 retry —— 網絡抖一抖就會靜靜哋漏成個分類');
+  ok(/failedLeaves/.test(src), '冇分開記「抓失敗」同「貼住上限」');
+});
+
+t('lib-index.load() 唔會靜靜哋食咗 error', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'lib-index.js'), 'utf8');
+  ok(!/\}\s*catch\s*\{\s*return false;\s*\}/.test(src),
+    'load() 有個裸 catch —— 之前就係咁令 server 揸住空索引照跑，一聲都唔出');
+  ok(/console\.error\([^)]*index/.test(src), 'load() 失敗要 console.error 出聲');
+});
+
+t('isPetCat 靠 topId 都認得寵物貨（catId 而家係葉分類）', () => {
+  ok(!core.isPetCat('105791'), '「水」呢個葉分類唔應該當寵物');
+  ok(core.isPetCat('189651'), '舊 call 法（直接畀頂層 id）要照舊行得通');
+  ok(core.isPetCat('190001', '189941'), '葉 id 認唔到，但 topId 係狗狗專區就要認得');
+  ok(core.isPetCat('08020100'), '百佳 08 開頭照舊');
+});
+
+t('scoreItem 有 topId 就扣得返寵物分', () => {
+  const terms = [...new Set(core.synonyms('三文魚').map(core.norm))];
+  const n = core.norm('三文魚味貓濕糧');
+  const plain = core.scoreItem(n, '', terms, core.norm('三文魚'), n, { catId: '190001' });
+  const pet = core.scoreItem(n, '', terms, core.norm('三文魚'), n, { catId: '190001', topId: '189651' });
+  gt(plain, pet, `冇 topId ${plain} 分 / 有 topId ${pet} 分 —— 有 topId 應該扣返寵物分`);
 });
 
 /* ---------------- 總結 ---------------- */

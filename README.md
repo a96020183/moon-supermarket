@@ -82,6 +82,17 @@
 * 索引只影響**百佳嘅搜尋**。百佳嘅分類瀏覽同惠康全部都係即時攞，永遠係最新價。
 * 搵唔到某件百佳貨？行「分類」入去嗰個細分類慢慢揀，嗰邊係即時攞，一定齊。
 
+### 惠康索引（GitHub Pages 版靠佢）
+
+* 位置：`data/wc-index.json`，行 `node build-snapshot.js` 就會更新。
+* 惠康**冇 sitemap**（`robots.txt` 寫住 `Sitemap not enabled now`），所以要靠分類頁爬。
+* 惠康每個分類揭到第 41 版就 HTTP 500，即係一個分類封頂 ~800 件。
+  淨爬嗰 22 個頂層分類會撞頂漏貨，所以爬嘅係**葉分類**（760 個，每個自己有條 800 件上限）。
+* 完整分類樹喺惠康首頁 `window.__NUXT__` 嘅 `cascaderData`（即係佢個 cascader 選單），
+  攞返嚟存喺 `data/wc-categories.json`，一星期重攞一次。
+* 每件貨記兩個分類欄位：`catId` = 葉分類、`topId` = 佢屬邊個頂層。
+  介面上「分類」版面照舊用嗰 22 個頂層做導航，靠 `topId` 同分類樹攤平認返啲貨。
+
 ---
 
 ## 五、檔案
@@ -107,6 +118,8 @@ hk-price-buddy/
 └── data/                      你部機自己嘅嘢，**唔好**上 GitHub
     ├── cache/                 網頁快取，隨時可以刪
     ├── pns-index.json         百佳本地目錄
+    ├── wc-index.json          惠康本地目錄
+    ├── wc-categories.json     惠康完整分類樹（22 個頂層 → 760 個細分類）
     └── history.json           價格記錄
 ```
 

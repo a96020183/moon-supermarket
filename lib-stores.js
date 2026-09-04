@@ -6,6 +6,9 @@
  * 唔行佢個搜尋頁 —— 改為由 robots 容許嘅分類頁建本地索引再喺本機搜。
  */
 
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
 const { parseSize, unitPrice, sizeLabel } = require('./lib-units.js');
 const cache = require('./lib-cache.js');
 
@@ -163,6 +166,109 @@ const WC_CATEGORIES = [
   { id: '105591', name: '原箱優惠', icon: '📦' },
   { id: '100021', name: '節慶精選', icon: '🎁' },
 ];
+
+/* ---- 惠康完整分類樹 ----
+ *
+ * 惠康冇 sitemap，所以要靠分類頁；但 WC_CATEGORIES 嗰 22 個係**頂層**，
+ * 每個頂層揭到第 41 版就 HTTP 500（即係封頂 ~800 件），淨爬頂層梗係漏貨。
+ *
+ * 完整分類樹其實一早喺首頁度：個 el-cascader-panel 嘅資料放喺
+ * window.__NUXT__ 嘅 state.cascaderData（{name,id,child} 三層）。
+ * 嗰段 __NUXT__ 係壓縮過嘅 JS（啲名全部變咗 a/b/ja 咁嘅變數），
+ * 硬砌正則一定拆到甩，所以就攞去 vm 度真係行一次，攞返個真物件。
+ *
+ * 順帶一提：POST /api/category/getCategory 試過，淨係覆返
+ * {"code":"0000","result":"success"}，冇 data，所以唔行嗰條路。
+ */
+
+const WC_CAT_FILE = path.join(__dirname, 'data', 'wc-categories.json');
+const WC_CAT_TTL = 7 * 24 * 3600 * 1000;     // 分類樹一星期先重攞一次，唔使次次打人哋
+
+/** 由首頁 HTML 抽 window.__NUXT__ 出嚟（喺 sandbox 度行，唔會掂到我哋自己個 process） */
+function wcNuxtState(html) {
+  const i = html.indexOf('window.__NUXT__=');
+  if (i < 0) return null;
+  const j = html.indexOf('</script>', i);
+  if (j < 0) return null;
+  const sandbox = { window: {} };
+  vm.createContext(sandbox);
+  try {
+    vm.runInContext(html.slice(i, j), sandbox, { timeout: 10000 });
+  } catch { return null; }
+  return sandbox.window.__NUXT__ || null;
+}
+
+/** {name,id,child} → {id,name,children}，順手隔走冇 id 嘅爛節點 */
+function wcNormTree(nodes) {
+  const out = [];
+  for (const n of nodes || []) {
+    if (!n || !n.id) continue;
+    out.push({
+      id: String(n.id),
+      name: decodeEntities(n.name || ''),
+      children: wcNormTree(n.child || n.children),
+    });
+  }
+  return out;
+}
+
+/**
+ * 惠康完整分類樹。有快取檔就直接用（預設一星期），
+ * 打唔到人哋個網站嗰陣亦都會退返去用舊檔，總好過乜都冇。
+ *   opts.force   = true  → 唔理快取，即刻重攞
+ *   opts.maxAge  = 毫秒  → 自訂快取幾耐先算過期
+ *   opts.offline = true  → 淨係讀快取檔，唔上網（測試用）
+ */
+async function wcCategoryTree(opts = {}) {
+  const maxAge = opts.maxAge == null ? WC_CAT_TTL : opts.maxAge;
+  let cached = null;
+  try { cached = JSON.parse(fs.readFileSync(WC_CAT_FILE, 'utf8')); } catch { /* 未有就算 */ }
+  const fresh = cached && Array.isArray(cached.tree) && cached.tree.length
+    && Date.now() - (cached.fetchedAt || 0) < maxAge;
+  if (fresh && !opts.force) return cached.tree;
+  if (opts.offline) return (cached && cached.tree) || [];
+
+  let tree = [];
+  try {
+    const html = await fetchText(`${WC}/zh-hant`, { timeout: 40000 });
+    const nuxt = wcNuxtState(html);
+    const raw = nuxt && nuxt.state && nuxt.state.cascaderData;
+    tree = wcNormTree(raw);
+  } catch (e) {
+    if (cached && cached.tree && cached.tree.length) return cached.tree;   // 打唔到就用舊嗰份
+    throw e;
+  }
+  if (!tree.length) {
+    if (cached && cached.tree && cached.tree.length) return cached.tree;
+    throw new FetchError('首頁搵唔到 cascaderData', 0);
+  }
+
+  const leaves = wcLeafCategories(tree).length;
+  fs.mkdirSync(path.dirname(WC_CAT_FILE), { recursive: true });
+  const tmp = `${WC_CAT_FILE}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ fetchedAt: Date.now(), tops: tree.length, leaves, tree }));
+  fs.renameSync(tmp, WC_CAT_FILE);
+  return tree;
+}
+
+/**
+ * 攤平做「真係有貨清單嗰啲分類」。惠康冇 lc/c 之分，每一層都揭得到貨，
+ * 所以攞最底嗰層（葉）就夠 —— 每個葉自己有一條 800 件上限，加埋就遠遠夠用。
+ * 每個葉都帶住 topId：前端個「分類」版面係用 22 個頂層做導航嘅，唔可以搞爛。
+ */
+function wcLeafCategories(tree) {
+  const out = [];
+  const walk = (node, top, trail) => {
+    const here = [...trail, node.name];
+    if (node.children && node.children.length) {
+      for (const k of node.children) walk(k, top, here);
+    } else {
+      out.push({ id: node.id, name: node.name, topId: top.id, topName: top.name, path: here });
+    }
+  };
+  for (const top of tree || []) walk(top, top, []);
+  return out;
+}
 
 function wcParseCards(html) {
   const out = [];
@@ -434,7 +540,11 @@ async function pnsProduct(code) {
 
 module.exports = {
   STORES, FetchError, fetchText, fetchHeadText, decodeEntities, money, decorate, ngState,
-  wellcome: { search: wcSearch, category: wcCategory, detail: wcDetail, parseCards: wcParseCards, CATEGORIES: WC_CATEGORIES },
+  wellcome: {
+    search: wcSearch, category: wcCategory, detail: wcDetail, parseCards: wcParseCards,
+    CATEGORIES: WC_CATEGORIES, categoryTree: wcCategoryTree, leafCategories: wcLeafCategories,
+    nuxtState: wcNuxtState, CAT_FILE: WC_CAT_FILE,
+  },
   parknshop: {
     category: pnsCategory, product: pnsProduct, harvest: pnsHarvestCategories,
     map: pnsMap, productsFrom: pnsProductsFrom, categoryTree: pnsCategoryTree, leafCategories: pnsLeafCategories,

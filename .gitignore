@@ -11,8 +11,16 @@ data/pns-index.json
 data/wc-index.json
 data/wc-images.json
 
+# 惠康分類樹快取 —— 由惠康首頁攞返嚟，過期自己再攞；
+# 派出去嗰份 public/data/meta.json 本身已經帶住成棵樹，所以呢個唔使上
+data/wc-categories.json
+
 # 價格記錄 —— 呢個係你部機自己嘅歷史，唔關朋友事
 data/history.json
+
+# 測試用嘅 driver 頁（喺真 Chrome 度撳掣嗰啲），跑完就唔使留
+test-ui-driver.html
+_drv*.html
 
 # 試嘢用嘅臨時檔（呢個 project 一律用 _ 開頭做前綴）
 _*.js

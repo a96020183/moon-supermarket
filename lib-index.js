@@ -11,7 +11,7 @@ const path = require('path');
 const S = require('./lib-stores.js');
 // 詞庫、正規化同評分全部行 search-core —— server 同 iPad 靜態版一定要搜出同一個結果，
 // 所以呢度唔會再自己抄一份 norm / headName / score。
-const { synonyms, norm, scoreItem, headName } = require('./public/search-core.js');
+const { synonyms, norm, scoreItem, cleanHead, headRawOf } = require('./public/search-core.js');
 
 const FILE = path.join(__dirname, 'data', 'pns-index.json');
 // 每個分類最多行幾多版。行到冇新貨就會自己收，所以細分類唔會白行。
@@ -35,7 +35,12 @@ function load() {
     reindex();
     try { loadedMtime = fs.statSync(FILE).mtimeMs; } catch { /* 唔緊要 */ }
     return true;
-  } catch { return false; }
+  } catch (e) {
+    // 一定要出聲。之前呢個 catch 靜靜哋食咗 error，令 server 揸住個空索引照行，
+    // 表面正常但百佳完全搵唔到嘢 —— debug 咗好久先發現。
+    if (e.code !== 'ENOENT') console.error(`[index] 載入 ${path.basename(FILE)} 失敗：${e.message}`);
+    return false;
+  }
 }
 
 /** 如果索引檔喺出面被人重建過（例如行咗 rebuild-index.js），自動讀返新嗰份 */
@@ -63,7 +68,10 @@ function reindex() {
   for (const p of state.items) {
     p._name = norm(`${p.name} ${p.brand || ''}`);   // 品牌都可以夾中（搵「屈臣氏」都得）
     p._head = norm(p.name);                          // 但判斷中心詞淨係睇商品名
-    p._headClean = headName(p._head);                // 預先去埋規格尾巴，慳返每次搜尋成萬次正則
+    // 淨名一定要由**原始**個名度整（cleanHead），唔可以 headName(norm(...)) ——
+    // norm 會把括號食走，「(包裝隨機發放)」就變咗淨名一部分，認唔到中心詞。
+    p._headClean = cleanHead(p.name);          // 剝晒括號同口味嘅淨名
+    p._headRaw = headRawOf(p.name);            // 未剝過嘅淨名（分辨真 exact）
     p._cat = norm((p.categoryPath || []).join(' '));
     p._hay = `${p._name} ${p._cat}`;
   }
@@ -89,7 +97,7 @@ function search(q, limit = 60, opts = {}) {
   const scored = [];
   for (const p of state.items) {
     const s = scoreItem(p._name, p._cat, terms, qn, p._head,
-      { catId: p.catId, includePets: !!opts.includePets, head: p._headClean });
+      { catId: p.catId, includePets: !!opts.includePets, head: p._headClean, headRaw: p._headRaw });
     if (s) scored.push([s, p]);
   }
   scored.sort((a, b) => b[0] - a[0] || a[1].price - b[1].price);
@@ -98,7 +106,7 @@ function search(q, limit = 60, opts = {}) {
 }
 
 function stripInternal(p) {
-  const { _hay, _name, _head, _headClean, _cat, ...rest } = p;
+  const { _hay, _name, _head, _headClean, _headRaw, _cat, ...rest } = p;
   return rest;
 }
 

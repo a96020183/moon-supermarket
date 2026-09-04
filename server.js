@@ -81,7 +81,10 @@ function loadWcCat() {
     const m = fs.statSync(WC_INDEX_FILE).mtimeMs;
     if (m === wcCatMtime) return;
     const raw = JSON.parse(fs.readFileSync(WC_INDEX_FILE, 'utf8'));
-    wcCat = new Map((raw.items || []).filter((p) => p.catId).map((p) => [String(p.sku), String(p.catId)]));
+    // 索引嗰邊 catId 而家記葉分類，但 server 呢度淨係攞嚟認寵物貨，
+    // 認得嘅係嗰 22 個頂層，所以要 topId 行先（舊索引冇 topId 就用返 catId）
+    wcCat = new Map((raw.items || []).filter((p) => p.topId || p.catId)
+      .map((p) => [String(p.sku), String(p.topId || p.catId)]));
     wcCatMtime = m;
     console.log(`[wc] 惠康分類對照表：${wcCat.size} 件`);
   } catch { /* 未跑過 build-snapshot 就冇，唔緊要 */ }

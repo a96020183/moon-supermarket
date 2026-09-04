@@ -10,8 +10,8 @@
  *   node build-snapshot.js                 全套做
  *   node build-snapshot.js --skip-wellcome  唔行惠康爬蟲（讀返上次嗰份 wc-index.json）
  *   node build-snapshot.js --skip-images    唔補圖
- *   node build-snapshot.js --cats=3         惠康只行頭 3 個分類（試機用）
- *   node build-snapshot.js --pages=10       每個分類最多揭 10 版
+ *   node build-snapshot.js --cats=3         惠康只行頭 3 個**頂層**底下嘅葉分類（試機用）
+ *   node build-snapshot.js --pages=10       每個葉分類最多揭 10 版
  *   node build-snapshot.js --images=200     今次最多補 200 張圖（或者行 IMAGE_BUDGET=200）
  *   node build-snapshot.js --retry-images   連之前試過攞唔到圖嗰啲都再試一次
  *   node build-snapshot.js --warn-mb=12     百佳嗰份大過幾多 MB 就出聲（預設 12）
@@ -126,9 +126,18 @@ function writeJsonAtomic(file, obj) {
 /* ---------------- 1. 惠康目錄爬蟲 ---------------- */
 
 /**
- * 行晒（或者頭幾個）惠康分類，逐版揭到「呢版冇新 sku」或者「攞唔到嘢」為止。
- * 做法同 lib-index.build() 一樣。全程串行 —— lib-stores 嘅 fetchText 本身
- * 已經幫每個 host 排住隊（惠康 900ms 一次），所以呢度唔會自己再開並行。
+ * 行晒惠康**葉分類**，逐版揭到「呢版冇新 sku」或者「攞唔到嘢」為止。
+ * 全程串行 —— lib-stores 嘅 fetchText 本身已經幫每個 host 排住隊
+ * （惠康 900ms 一次），所以呢度唔會自己再開並行。
+ *
+ * 點解唔爬返嗰 22 個頂層？因為惠康每個分類揭到第 41 版就 HTTP 500，
+ * 即係一個分類封頂 ~800 件。爬頂層嗰陣「個人護理」「原箱優惠」等 8 個
+ * 分類全部貼住上限 = 有貨攞唔到。葉分類各有各嘅 800 件上限，所以
+ * 爬 760 個葉 ≈ 覆蓋率大躍進。
+ *
+ * 每件貨記兩個分類欄位：
+ *   catId = 葉分類 id（搜尋分數靠佢查返分類全名）
+ *   topId = 佢屬邊個頂層（前端「分類」版面同寵物判斷淨係識 22 個頂層）
  */
 async function crawlWellcome({ pages, catLimit }) {
   const prev = await readJsonSafe(WC_FILE, { items: [] });
@@ -136,38 +145,135 @@ async function crawlWellcome({ pages, catLimit }) {
   const found = new Map((prev.items || []).map((p) => [p.sku, p]));
   const before = found.size;
 
-  const cats = catLimit ? S.wellcome.CATEGORIES.slice(0, catLimit) : S.wellcome.CATEGORIES;
-  log(`惠康爬蟲開始：${cats.length} 個分類，每個最多 ${pages} 版；由 ${before} 件開始`);
-  const started = Date.now();
+  /* 舊索引嗰陣 catId 記嘅就係頂層 id、冇 topId。補返佢，
+     唔係嘅話今次冇重新抓到嗰啲舊貨會冇晒 topId → 分類版面同寵物篩選漏咗佢哋。 */
+  const TOP_IDS = new Set(S.wellcome.CATEGORIES.map((c) => String(c.id)));
+  let backfilled = 0;
+  for (const p of found.values()) {
+    if (!p.topId && TOP_IDS.has(String(p.catId))) { p.topId = String(p.catId); backfilled++; }
+  }
+  if (backfilled) log(`舊索引補返 topId：${backfilled} 件`);
 
-  for (let i = 0; i < cats.length; i++) {
-    const c = cats[i];
+  /* 分類樹攞唔到就退返去爬嗰 22 個頂層（即係舊行為），總好過乜都唔爬 */
+  let leaves;
+  try {
+    const tree = await S.wellcome.categoryTree();
+    leaves = S.wellcome.leafCategories(tree);
+    log(`惠康分類樹：${tree.length} 個頂層 → ${leaves.length} 個葉分類`);
+  } catch (e) {
+    console.error(`[warn] 攞唔到惠康分類樹（${e.message}），退返去淨爬 22 個頂層`);
+    leaves = S.wellcome.CATEGORIES.map((c) => ({ id: String(c.id), name: c.name, topId: String(c.id), topName: c.name }));
+  }
+
+  /* 一件貨可以同時擺喺幾個分類（例如原箱水又係「原箱優惠」又係「飲品」），
+     但我哋一件貨得一個 catId —— 邊個分類最後爬到就邊個認領。
+     所以葉分類次序要照返 CATEGORIES 嗰 22 個嘅次序（原箱優惠排第 21），
+     唔係嘅話認領權會大執位，「原箱優惠」會突然變到得返零星幾件。 */
+  const topOrder = new Map(S.wellcome.CATEGORIES.map((c, i) => [String(c.id), i]));
+  /* 唯一例外：貓貓／狗狗專區排到最尾。「原箱優惠」底下有成條「寵物用品」
+     子樹（原箱貓乾糧咁），畀佢認領咗嘅話件貨個 topId 就變咗原箱優惠，
+     「只睇寵物」個篩選即刻搵佢唔返。寵物專區行最後，貓糧就實係貓糧。 */
+  const PET_TOPS = new Set(['189651', '189941']);
+  const ord = (l) => {
+    const t = String(l.topId);
+    return (topOrder.has(t) ? topOrder.get(t) : 99) + (PET_TOPS.has(t) ? 100 : 0);
+  };
+  leaves = leaves.map((l, i) => ({ l, i })).sort((a, b) => ord(a.l) - ord(b.l) || a.i - b.i).map((x) => x.l);
+
+  // --cats=N 淨係爬頭 N 個頂層底下嘅葉分類（試機用）
+  if (catLimit) {
+    const keep = new Set(S.wellcome.CATEGORIES.slice(0, catLimit).map((c) => String(c.id)));
+    leaves = leaves.filter((l) => keep.has(String(l.topId)));
+  }
+
+  log(`惠康爬蟲開始：${leaves.length} 個葉分類，每個最多 ${pages} 版；由 ${before} 件開始`);
+  const started = Date.now();
+  const capped = [];                   // 揭到上限先停嘅葉分類，行完出報告
+  const failedLeaves = [];             // 真係抓失敗（唔係「冇貨」）嘅葉分類
+  let pagesTotal = 0;
+  let failedPages = 0;
+
+  for (let i = 0; i < leaves.length; i++) {
+    const c = leaves[i];
     const seenHere = new Set();        // 呢個分類自己見過嘅 sku（唔可以同舊索引比，唔係第一版就收工）
     let pagesRead = 0;
+    let hitLimit = false;
+    let broke = false;                 // 中途抓失敗（同「揭到底」要分得清楚）
     for (let page = 1; page <= pages; page++) {
-      let list;
-      try {
-        list = await S.wellcome.category(c.id, page);
-      } catch (e) {
-        console.error(`  [warn] ${c.name} 第 ${page} 版：${e.message}`);
+      let list = null;
+      let lastErr = null;
+      /* 網絡抖一抖唔應該令成個分類白爬。試 3 次先當佢死 ——
+         之前試過一轉 760 個葉入面有 2 個係純粹抓失敗、一件都冇入索引，
+         而且喺 log 度同「呢個分類真係冇貨」完全分唔開。 */
+      for (let attempt = 1; attempt <= 3 && list === null; attempt++) {
+        try {
+          list = await S.wellcome.category(c.id, page);
+        } catch (e) {
+          lastErr = e;
+          if (e.status === 500) break;              // 揭爆咗，唔使再試
+          if (attempt < 3) await sleep(1500 * attempt);
+        }
+      }
+      if (list === null) {
+        if (lastErr && lastErr.status === 500) hitLimit = true;   // 人哋封頂，唔係我哋壞
+        else { failedPages++; broke = true; console.error(`  [FAIL] ${c.topName} › ${c.name} 第 ${page} 版：${lastErr && lastErr.message}（試咗 3 次）`); }
         break;
       }
-      pagesRead++;
+      pagesRead++; pagesTotal++;
       if (!list.length) break;         // 揭到底
       let fresh = 0;
       for (const p of list) {
         if (!seenHere.has(p.sku)) { seenHere.add(p.sku); fresh++; }
-        // catId = 抓佢嗰個分類，靜態版靠佢做分類瀏覽
-        found.set(p.sku, { ...p, catId: String(c.id) });
+        /* 一件貨可以同時擺喺幾個分類（例如「原箱優惠 › 汽水」同「飲品 › 汽水」都有佢）。
+           以前淨係記一個 catId，後爬嘅葉會覆蓋前面 → 分類瀏覽報少貨
+           （實測「廚具及餐桌用品」官網 232 件、app 只出 157 件）。
+           而家全部都記低：catId/topId 保留做「主分類」（向後相容），
+           catIds/topIds 收晒佢所有身份，分類瀏覽夾中任何一個就算。 */
+        const old = found.get(p.sku);
+        const catIds = new Set(old && old.catIds ? old.catIds : (old && old.catId ? [old.catId] : []));
+        const topIds = new Set(old && old.topIds ? old.topIds : (old && old.topId ? [old.topId] : []));
+        catIds.add(String(c.id));
+        topIds.add(String(c.topId));
+        found.set(p.sku, {
+          ...p,
+          catId: old && old.catId ? old.catId : String(c.id),      // 主分類：邊個先認領就係邊個
+          topId: old && old.topId ? old.topId : String(c.topId),
+          catIds: [...catIds],
+          topIds: [...topIds],
+        });
       }
       if (!fresh) break;               // 開始翻炒同一批，唔使再揭落去
+      if (page === pages) hitLimit = true;
     }
-    log(`  [${i + 1}/${cats.length}] ${c.icon} ${c.name} → ${seenHere.size} 件（揭咗 ${pagesRead} 版）`);
+    if (hitLimit) capped.push(`${c.topName} › ${c.name}（${seenHere.size} 件）`);
+    if (broke) failedLeaves.push(`${c.topName} › ${c.name}（只攞到 ${seenHere.size} 件）`);
+    log(`  [${i + 1}/${leaves.length}] ${c.topName} › ${c.name} → ${seenHere.size} 件（揭咗 ${pagesRead} 版）${hitLimit ? ' ⚠️ 貼住上限' : ''}`);
+
+    // 行成粒鐘咁耐，中途死機／畀人 Ctrl+C 唔應該白行 —— 每 25 個葉存一次
+    if ((i + 1) % 25 === 0 || i === leaves.length - 1) {
+      const snap = [...found.values()];
+      writeJsonAtomic(WC_FILE, { builtAt: Date.now(), count: snap.length, items: snap });
+      const per = (Date.now() - started) / (i + 1);
+      const left = Math.round(per * (leaves.length - i - 1) / 60000);
+      log(`  … 存檔：${snap.length} 件（新增 ${snap.length - before}），估計仲有 ${left} 分鐘`);
+    }
   }
 
   const items = [...found.values()];
   writeJsonAtomic(WC_FILE, { builtAt: Date.now(), count: items.length, items });
-  log(`惠康爬蟲完成：${items.length} 件（新增 ${items.length - before}），用咗 ${Math.round((Date.now() - started) / 1000)} 秒`);
+  log(`惠康爬蟲完成：${items.length} 件（新增 ${items.length - before}），揭咗 ${pagesTotal} 版，用咗 ${Math.round((Date.now() - started) / 1000)} 秒`);
+  if (capped.length) {
+    log(`⚠️ ${capped.length} 個葉分類貼住上限，可能仲有貨：`);
+    for (const c of capped) log(`   · ${c}`);
+  }
+  if (failedLeaves.length) {
+    // 呢個同「貼住上限」唔同：上限係人哋唔畀，失敗係我哋攞唔到，要記住返轉頭補
+    log(`❌ ${failedLeaves.length} 個葉分類抓失敗（${failedPages} 版），呢啲分類今次冇更新到：`);
+    for (const c of failedLeaves) log(`   · ${c}`);
+    log('   → 想補返就再行一次（索引係增量嘅，唔會白行）');
+  } else {
+    log('✅ 冇任何葉分類抓失敗');
+  }
   return items;
 }
 
@@ -207,7 +313,11 @@ async function fillImages({ budget, retry }) {
     '100022', // 朱古力、薯片、零食
   ];
   const rank = new Map(CAT_PRIORITY.map((id, i) => [id, i]));
-  const prio = (p) => (rank.has(String(p.catId)) ? rank.get(String(p.catId)) : 99);
+  // catId 而家係葉分類，所以要睇 topId 先對得返上面呢張頂層清單
+  const prio = (p) => {
+    const t = String(p.topId || p.catId);
+    return rank.has(t) ? rank.get(t) : 99;
+  };
 
   const map = (await readJsonSafe(WC_IMG_FILE, {})) || {};
   const todo = items.filter((p) => {
@@ -265,7 +375,7 @@ const slimSize = (s) => (s && s.kind && isFinite(s.base) ? { kind: s.kind, base:
  * 砌成同 /api/search 一模一樣嘅欄位，令前端零轉換。
  * 唔要 rel / lowest / isLowest / enriched / _name / _cat / _hay 呢啲內部嘢。
  */
-function shape(p, { store, image, catId }) {
+function shape(p, { store, image, catId, topId, catIds, topIds }) {
   const meta = S.STORES[store];
   const out = {
     id: p.id || `${store}:${p.sku}`,
@@ -286,6 +396,14 @@ function shape(p, { store, image, catId }) {
     storeColour: meta.colour,
     catId: String(catId || ''),
   };
+  // 惠康 catId 而家記葉分類，所以要多一個 topId 講返佢屬邊個頂層 ——
+  // 前端「分類」版面同寵物判斷都係認住嗰 22 個頂層嘅。
+  if (topId) out.topId = String(topId);
+  /* 一件貨可以同時屬幾個分類。catId/topId 係「主分類」（向後相容），
+     catIds/topIds 收晒佢所有身份 —— 分類瀏覽夾中任何一個就要出佢。
+     淨得一個身份就唔使寫入去，慳返啲檔案大細。 */
+  if (catIds && catIds.length > 1) out.catIds = catIds.map(String);
+  if (topIds && topIds.length > 1) out.topIds = topIds.map(String);
   // brand / origin 唔喺合約條列入面，但 /api/search 有、前端又真係用得着
   // （brand 落搜尋分數、origin 落詳情頁），所以有先加，冇就唔加。
   if (p.brand) out.brand = p.brand;
@@ -313,7 +431,8 @@ async function buildSnapshot() {
   const imgs = (await readJsonSafe(WC_IMG_FILE, {})) || {};
   const wcItems = (wcIdx.items || [])
     .filter((p) => p && p.sku && p.price > 0)
-    .map((p) => shape(p, { store: 'wellcome', image: imgs[p.sku] || p.image, catId: p.catId }));
+    .map((p) => shape(p, { store: 'wellcome', image: imgs[p.sku] || p.image,
+      catId: p.catId, topId: p.topId, catIds: p.catIds, topIds: p.topIds }));
 
   /* --- 百佳（讀 rebuild-index.js 整嗰份，唔會寫佢） --- */
   const pnsIdx = await readJsonSafe(PNS_FILE, { items: [] });
@@ -330,6 +449,20 @@ async function buildSnapshot() {
     console.error(`[warn] 攞唔到百佳分類樹（${e.message}），用返上次嗰份（${pnsTree.length} 個大類）`);
   }
   const byName = catIdByName(pnsTree);
+
+  /* 惠康：導航照舊用嗰 22 個頂層（名同 icon 都係我哋自己揀嘅），
+     但每個掛返佢啲子分類落去 —— 靜態版要靠呢個先知邊啲葉分類屬邊個頂層，
+     撳「個人護理」先出得返而家記住葉 catId 嗰批貨。 */
+  let wcTree = [];
+  try {
+    wcTree = await S.wellcome.categoryTree();
+  } catch (e) {
+    wcTree = (prevMeta && prevMeta.categories && prevMeta.categories.wellcome) || [];
+    console.error(`[warn] 攞唔到惠康分類樹（${e.message}），用返上次嗰份`);
+  }
+  const wcKids = new Map(wcTree.map((t) => [String(t.id), t.children || []]));
+  const wcCats = S.wellcome.CATEGORIES.map((c) => ({ ...c, children: wcKids.get(String(c.id)) || [] }));
+  log(`惠康分類樹：${wcCats.length} 個頂層、${S.wellcome.leafCategories(wcTree).length} 個葉分類`);
 
   const pnsItems = (pnsIdx.items || [])
     .filter((p) => p && p.sku && p.price > 0)
@@ -348,7 +481,7 @@ async function buildSnapshot() {
    * builtAt 亦都因此變成「啲價最後一次真係變過嘅時間」，比「幾時行過」有用。 */
   const dataHash = crypto.createHash('sha1')
     .update(JSON.stringify(wcItems)).update(JSON.stringify(pnsItems))
-    .update(JSON.stringify(pnsTree))
+    .update(JSON.stringify(pnsTree)).update(JSON.stringify(wcCats))
     .digest('hex');
   const unchanged = prevMeta && prevMeta.dataHash === dataHash;
   if (unchanged) log('同上次快照一模一樣，builtAt 保持唔變（唔會製造無謂 commit）');
@@ -357,7 +490,7 @@ async function buildSnapshot() {
     builtAt: unchanged ? prevMeta.builtAt : Date.now(),
     dataHash,
     counts: { wellcome: wcItems.length, parknshop: pnsItems.length },
-    categories: { wellcome: S.wellcome.CATEGORIES, parknshop: pnsTree },
+    categories: { wellcome: wcCats, parknshop: pnsTree },
   };
 
   const files = [

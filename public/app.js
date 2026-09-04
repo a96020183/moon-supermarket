@@ -128,6 +128,7 @@ function altLine(p) {
 }
 
 function renderGrid(el, products) {
+  seeProducts(products);            // 畫得出嚟就一定撳得返，唔可以再靠 LAST
   if (!products.length) { el.innerHTML = ''; return; }
   el.innerHTML = products.map(cardHTML).join('');
   hydrateThumbs(el);
@@ -149,6 +150,7 @@ function hydrateThumbs(root) {
       api('/api/thumb?sku=' + encodeURIComponent(sku)).then((r) => {
         if (!r || !r.image) return;
         // 寫返落貨品物件度，之後加落清單／收藏就有埋張圖
+        for (const p of SEEN.values()) if (p.store === 'wellcome' && p.sku === sku && !p.image) p.image = r.image;
         for (const arr of [LAST, FAVS, LIST]) {
           const p = arr.find((x) => x.store === 'wellcome' && x.sku === sku);
           if (p && !p.image) p.image = r.image;
@@ -166,8 +168,29 @@ function hydrateThumbs(root) {
 
 /* ---------------- 卡片動作 ---------------- */
 
+/**
+ * 畫過／攞過嘅貨品全部登記喺呢度，撳落張卡先搵得返件貨。
+ *
+ * 舊版淨係靠 LAST 一個陣列。但 LAST 每次搜尋、每次入分類都會成個換走，
+ * 而「搵嘢」嗰版啲卡仲原封不動咁留喺畫面度 —— 件貨已經唔喺 LAST，
+ * findProduct 返 undefined，撳 ♡ 同 ＋ 就靜靜哋乜都唔做。
+ * （實測撞法：搵「啤酒」→ 入「分類」撳一個 → 撳返「搵嘢」→ 啲啤酒卡個 ♡ 死晒。）
+ * 所以改用一個唔會被覆蓋嘅登記處：畫得出嚟就一定撳得返，滿咗先由最舊嗰件開始踢。
+ */
+const SEEN = new Map();
+const SEEN_CAP = 4000;
+
+function seeProducts(products) {
+  for (const p of products || []) {
+    if (!p || !p.id) continue;
+    if (SEEN.has(p.id)) SEEN.delete(p.id);        // 行返去隊尾，變相 LRU
+    SEEN.set(p.id, p);
+  }
+  while (SEEN.size > SEEN_CAP) SEEN.delete(SEEN.keys().next().value);
+}
+
 function findProduct(id) {
-  return LAST.find((p) => p.id === id) || FAVS.find((p) => p.id === id) || LIST.find((p) => p.id === id);
+  return SEEN.get(id) || FAVS.find((p) => p.id === id) || LIST.find((p) => p.id === id);
 }
 
 document.addEventListener('click', (ev) => {
@@ -176,7 +199,8 @@ document.addEventListener('click', (ev) => {
   if (btn && card) {
     ev.stopPropagation();
     const p = findProduct(card.dataset.id);
-    if (!p) return;
+    // 真係搵唔返就至少嗌一聲 —— 舊版喺呢度靜靜哋 return，用家淨係覺得「撳極都冇反應」
+    if (!p) { toast('呢件貨嘅資料唔見咗，搵多次先'); return; }
     if (btn.dataset.act === 'add') { toggleList(p); redrawCards(); }
     if (btn.dataset.act === 'fav') { toggleFav(p); redrawCards(); }
     return;
@@ -184,6 +208,7 @@ document.addEventListener('click', (ev) => {
   if (card) {
     const p = findProduct(card.dataset.id);
     if (p) openItem(p);
+    else toast('呢件貨嘅資料唔見咗，搵多次先');
   }
 });
 
@@ -238,22 +263,27 @@ async function loadSnapshot() {
 
   // 分類 id → 中文名。惠康件貨淨係得個 catId，要靠呢個查返個名先計到「分類命中」分。
   const catName = new Map();
-  for (const c of meta.categories?.wellcome || []) catName.set('wellcome:' + c.id, c.name);
-  (function walkNames(nodes, trail) {
+  const walkNames = (store) => function walk(nodes, trail) {
     for (const n of nodes || []) {
       const path = [...trail, n.name];
-      catName.set('parknshop:' + n.id, path.join(' '));
-      walkNames(n.children, path);
+      catName.set(store + ':' + n.id, path.join(' '));
+      walk(n.children, path);
     }
-  }(meta.categories?.parknshop || [], []));
+  };
+  // 惠康而家 catId 記葉分類，所以要行埋子分類 —— 順手令分類命中分更準
+  // （「貓貓專區 貓乾糧」比淨得個「貓貓專區」講得清楚）
+  walkNames('wellcome')(meta.categories?.wellcome || [], []);
+  walkNames('parknshop')(meta.categories?.parknshop || [], []);
 
   STATIC.meta = meta;
   STATIC.rows = [...(wc.items || []), ...(pns.items || [])].map((p) => {
     const cat = p.categoryPath?.length ? p.categoryPath.join(' ') : (catName.get(p.store + ':' + p.catId) || '');
     // h = 淨係商品名，用嚟認中心詞（連品牌一齊擺就會認唔到「…全脂牛奶」係奶）
     const h = SC.norm(p.name);
-    // hc = 預先去埋規格尾巴嘅「淨名」，唔預先算嘅話每次搜尋要行成萬次正則
-    return { p, n: SC.norm(`${p.name} ${p.brand || ''}`), h, hc: SC.headName(h), c: SC.norm(cat) };
+    // hc = 預先去埋規格同括號備註嘅「淨名」，唔預先算嘅話每次搜尋要行成萬次正則。
+    // 一定要由**原始**個名度整（cleanHead），唔可以 headName(h) —— h 已經 norm 咗，
+    // 括號畀 norm 換成空格，「(包裝隨機發放)」就會賴死喺淨名度，認唔到中心詞。
+    return { p, n: SC.norm(`${p.name} ${p.brand || ''}`), h, hc: SC.cleanHead(p.name), hr: SC.headRawOf(p.name), c: SC.norm(cat) };
   });
   STATIC.byId = new Map(STATIC.rows.map((r) => [r.p.id, r]));
   buildCatKids(meta);
@@ -263,14 +293,15 @@ async function loadSnapshot() {
 /** 撳中類（例如「紙巾、廁紙」）都要出到入面所有細類嘅貨，所以預先攤平佢 */
 function buildCatKids(meta) {
   STATIC.kids = new Map();
-  for (const c of meta.categories?.wellcome || []) STATIC.kids.set('wellcome:' + c.id, new Set([String(c.id)]));
-  const walk = (n) => {
+  const walk = (store) => function w(n) {
     const set = new Set([String(n.id)]);
-    for (const k of n.children || []) for (const id of walk(k)) set.add(id);
-    STATIC.kids.set('parknshop:' + n.id, set);
+    for (const k of n.children || []) for (const id of w(k)) set.add(id);
+    STATIC.kids.set(store + ':' + n.id, set);
     return set;
   };
-  for (const g of meta.categories?.parknshop || []) walk(g);
+  // 惠康都要攤平：件貨記住嘅係葉分類 id，撳頂層要出得返佢啲仔孫嘅貨
+  for (const c of meta.categories?.wellcome || []) walk('wellcome')(c);
+  for (const g of meta.categories?.parknshop || []) walk('parknshop')(g);
 }
 
 /** 一間超市入面搵。同 server 一樣用同義詞展開，分數帶埋出去等兩間可以撈埋一齊排。 */
@@ -282,7 +313,8 @@ function staticSearch(q, limit, store, opts = {}) {
   for (const r of STATIC.rows) {
     if (store && r.p.store !== store) continue;
     const s = SC.scoreItem(r.n, r.c, terms, qn, r.h,
-      { catId: r.p.catId, includePets: !!opts.includePets, head: r.hc });
+      { catId: r.p.catIds && r.p.catIds.length ? r.p.catIds : r.p.catId,
+        topId: r.p.topIds && r.p.topIds.length ? r.p.topIds : r.p.topId, includePets: !!opts.includePets, head: r.hc, headRaw: r.hr });
     if (s) out.push({ ...r.p, rel: s });
   }
   out.sort((a, b) => b.rel - a.rel || a.price - b.price);
@@ -304,7 +336,13 @@ function staticSearchBoth(q, stores, opts = {}) {
 
 function staticCategory(store, id) {
   const ids = STATIC.kids.get(store + ':' + id) || new Set([String(id)]);
-  return STATIC.rows.filter((r) => r.p.store === store && ids.has(String(r.p.catId))).map((r) => r.p);
+  // 一件貨可以同時屬幾個分類，夾中任何一個就要出 ——
+  // 淨係睇主分類（catId）會令「廚具及餐桌用品」由 232 件跌到 157 件。
+  return STATIC.rows.filter((r) => {
+    if (r.p.store !== store) return false;
+    const mine = r.p.catIds && r.p.catIds.length ? r.p.catIds : [r.p.catId];
+    return mine.some((c) => ids.has(String(c)));
+  }).map((r) => r.p);
 }
 
 /* ---- 比價：抄返 server 嗰套思路（中心詞 + 分類 + 規格接近） ---- */
@@ -529,7 +567,10 @@ function currentFilters() {
 }
 
 /** 呢件貨係咪寵物用品（百佳 08 開頭、惠康貓貓／狗狗專區） */
-const isPet = (p) => !!(SC && SC.isPetCat && SC.isPetCat(p.catId));
+// 傳晒所有分類身份 —— 原箱貓糧同時屬「原箱優惠」同「貓貓專區」，淨睇主分類會甩標籤
+const isPet = (p) => !!(SC && SC.isPetCat
+  && SC.isPetCat(p.catIds && p.catIds.length ? p.catIds : p.catId,
+                 p.topIds && p.topIds.length ? p.topIds : p.topId));
 
 function applyFilters(list) {
   const f = currentFilters();
@@ -559,8 +600,9 @@ function applyFilters(list) {
   return out;
 }
 
-/** LAST 只留唯一貨品，免得愈積愈多 */
+/** LAST 只留唯一貨品，免得愈積愈多。真正嘅「撳得返」靠 SEEN，唔靠呢個。 */
 function remember(products) {
+  seeProducts(products);
   const seen = new Set(LAST.map((p) => p.id));
   for (const p of products) if (!seen.has(p.id)) { seen.add(p.id); LAST.push(p); }
   if (LAST.length > 800) LAST = LAST.slice(-500);
@@ -588,6 +630,7 @@ async function doSearch(q) {
     });
     if (seq !== searchSeq) return;
     LAST = r.products || [];
+    seeProducts(LAST);              // 畀篩選隱起咗嗰啲，放寬返都要撳得到
     const shown = applyFilters(LAST);
     renderGrid($('#results'), shown);
 
@@ -624,14 +667,42 @@ function renderChips() {
   const parts = [];
   if (RECENT.length) {
     parts.push('<span class="chip-label">頭先搵過</span>');
-    parts.push(...RECENT.map((t) => `<button class="chip recent" data-q="${esc(t)}">${esc(t)}</button>`));
+    // 一格分兩橛：左邊撳落去再搵一次，右邊個 ✕ 剷走佢。
+    // ✕ 唔可以塞入個 chip 掣入面（button 唔可以套 button），所以外面包一層 span。
+    // 兩橛之間有條線分開，✕ 有成 36×40 —— 手指粗都唔會撳錯。
+    parts.push(...RECENT.map((t) => `<span class="chip recent"
+      ><button class="chip-go" data-q="${esc(t)}">${esc(t)}</button
+      ><button class="chip-x" data-drop="${esc(t)}" aria-label="剷走「${esc(t)}」">✕</button
+    ></span>`));
+    parts.push('<button class="chip chip-clear" data-clear="1">清走全部</button>');
   }
   parts.push('<span class="chip-label">大家都搵</span>');
   parts.push(...(BOOT?.popular || []).map((t) => `<button class="chip" data-q="${esc(t)}">${esc(t)}</button>`));
   el.innerHTML = parts.join('');
 }
 
+/** 剷走一個「頭先搵過」 */
+function dropRecent(q) {
+  const n = RECENT.length;
+  RECENT = RECENT.filter((t) => t !== q);
+  if (RECENT.length === n) return;
+  haptic(); saveAll(); renderChips();
+  toast(`剷走咗「${q.slice(0, 10)}」`);
+}
+
+/** 成行「頭先搵過」清走 */
+function clearRecent() {
+  if (!RECENT.length) return;
+  RECENT = [];
+  haptic(); saveAll(); renderChips();
+  toast('頭先搵過嗰啲，清走晒喇');
+}
+
 $('#quickChips').addEventListener('click', (e) => {
+  // ✕ 同「清走全部」要行喺前面 —— 唔攔住就會跌落去下面順手再搵多次
+  const x = e.target.closest('[data-drop]');
+  if (x) { dropRecent(x.dataset.drop); return; }
+  if (e.target.closest('[data-clear]')) { clearRecent(); return; }
   const c = e.target.closest('[data-q]');
   if (!c) return;
   $('#search').value = c.dataset.q;
@@ -758,6 +829,7 @@ async function loadCategory(id, kind) {
   try {
     const r = await DATA.category(catStore, id, kind, $('#sortSel').value);
     LAST = r.products || [];
+    seeProducts(LAST);
     const shown = applyFilters(LAST);
     renderGrid($('#catResults'), shown);
     $('#catStatus').innerHTML = shown.length ? `<b>${shown.length}</b> 件貨品`
@@ -781,6 +853,7 @@ $('#moreCat').addEventListener('click', async (e) => {
     if (!fresh.length) { btn.hidden = true; toast('呢個分類冇更多喇'); return; }
     catPage.page = next;
     LAST = [...LAST, ...fresh];
+    seeProducts(fresh);
     const shown2 = applyFilters(LAST);
     renderGrid($('#catResults'), shown2);
     $('#catStatus').innerHTML = `<b>${shown2.length}</b> 件貨品`;
