@@ -10,6 +10,7 @@
  *   node build-snapshot.js                 全套做
  *   node build-snapshot.js --skip-wellcome  唔行惠康爬蟲（讀返上次嗰份 wc-index.json）
  *   node build-snapshot.js --skip-images    唔補圖
+ *   node build-snapshot.js --skip-extras    唔補 extra-skus.json 嗰批（惠康列表見唔到嘅缺貨貨品）
  *   node build-snapshot.js --cats=3         惠康只行頭 3 個**頂層**底下嘅葉分類（試機用）
  *   node build-snapshot.js --pages=10       每個葉分類最多揭 10 版
  *   node build-snapshot.js --images=200     今次最多補 200 張圖（或者行 IMAGE_BUDGET=200）
@@ -277,6 +278,103 @@ async function crawlWellcome({ pages, catLimit }) {
   return items;
 }
 
+/* ---------------- 1.5 補返惠康自己藏起嘅貨 ---------------- */
+
+const EXTRA_FILE = path.join(__dirname, 'extra-skus.json');
+
+/**
+ * 惠康「暫時缺貨」嘅貨品唔會出現喺分類列表，連佢自己個搜尋都搵唔到 ——
+ * 但商品頁仲喺度、價錢照更新。即係話上面個爬蟲點爬都爬佢哋唔到，
+ * 唔關分類漏爬事，係人哋根本冇喺列表出過。
+ *
+ * extra-skus.json 就係補丁：報咗缺失嘅 sku 擺入去，呢度直接開商品頁攞。
+ * 每次都重新抓（唔係淨抓新嘅），咁「價錢」同「有冇貨」先跟得上；
+ * 名單得十幾件，多打幾個 request 唔算失禮。
+ *
+ * 行喺爬蟲之後：爬蟲會用列表資料冚正個 record，跟住呢度再用商品頁資料補返
+ * 圖同「有冇貨」。件貨返晒貨、重新入返列表嗰陣，兩邊資料一樣，冇衝突。
+ */
+async function mergeExtras() {
+  const extra = await readJsonSafe(EXTRA_FILE, null);
+  const list = (extra && extra.wellcome) || [];
+  if (!list.length) { log('extra-skus.json 冇嘢要補'); return 0; }
+
+  const idx = await readJsonSafe(WC_FILE, { items: [] });
+  const found = new Map((idx.items || []).map((p) => [String(p.sku), p]));
+  const imgs = (await readJsonSafe(WC_IMG_FILE, {})) || {};
+
+  /* 分類唔使人手填 —— 商品頁自己講到佢叫「米粉/粉絲」，對返葉分類個名就有 id。
+     人手填反而易錯（第一次就填錯咗做「即食麵/米粉」）。名單入面有寫先當人手指定。 */
+  let byName = new Map();
+  try {
+    const leaves = S.wellcome.leafCategories(await S.wellcome.categoryTree());
+    for (const l of leaves) if (!byName.has(l.name)) byName.set(l.name, l);
+  } catch (e) {
+    console.error(`[warn] 攞唔到惠康分類樹（${e.message}），今次啲貨會冇分類（搜尋照出，分類瀏覽揀唔到）`);
+  }
+
+  log(`補返惠康藏起嘅貨：名單 ${list.length} 件`);
+  let ok = 0, failed = 0, oos = 0;
+  for (const e of list) {
+    const sku = String(e.sku);
+    let d = null, lastErr = null;
+    for (let attempt = 1; attempt <= 3 && !d; attempt++) {
+      try { d = await S.wellcome.detail(sku); }
+      catch (err) {
+        lastErr = err;
+        if (attempt < 3) await sleep(1200 * attempt);
+      }
+    }
+    if (!d) {
+      // 唔好靜靜雞食咗個 error —— 名單細，一件都唔應該無聲無息漏咗
+      console.error(`  [FAIL] ${sku}：${lastErr ? lastErr.message : '攞唔到'}（試咗 3 次）${e.note ? ' — ' + e.note : ''}`);
+      failed++;
+      continue;
+    }
+    if (!d.name || !(d.price > 0)) {
+      console.error(`  [SKIP] ${sku}：開到頁但冇名或者冇價，可能已經落架`);
+      failed++;
+      continue;
+    }
+
+    const old = found.get(sku) || {};
+    // 分類：名單寫死 > 商品頁自己講 > 上次記住嗰個
+    const leaf = d.categoryName ? byName.get(d.categoryName) : null;
+    const catId = String(e.catId || (leaf && leaf.id) || old.catId || '');
+    const topId = String(e.topId || (leaf && leaf.topId) || old.topId || '');
+
+    const rec = S.decorate({
+      ...old,
+      id: `wellcome:${sku}`,
+      store: 'wellcome',
+      sku,
+      name: d.name,
+      price: d.price,
+      wasPrice: old.wasPrice || null,
+      url: `${WC_ORIGIN}/zh-hant/wellcome/p/${encodeURIComponent(d.name)}/i/${sku}.html`,
+      image: d.image || old.image || null,
+      inStock: d.inStock,
+      promos: d.promos || [],
+      catId,
+      topId,
+      fromExtra: true,
+    }, d.spec);
+    if (d.origin) rec.origin = d.origin;
+
+    found.set(sku, rec);
+    if (d.image) imgs[sku] = d.image;
+    if (d.inStock === false) oos++;
+    ok++;
+    const catNote = catId ? `${leaf ? leaf.topName + ' › ' + leaf.name : catId}` : '⚠️ 無分類';
+    log(`  ✓ ${sku} ${d.name} $${d.price}${d.inStock === false ? '（暫時缺貨）' : ''} — ${catNote}`);
+  }
+
+  writeJsonAtomic(WC_FILE, { builtAt: Date.now(), count: found.size, items: [...found.values()] });
+  writeJsonAtomic(WC_IMG_FILE, imgs);
+  log(`補貨完成：入到 ${ok} 件（其中 ${oos} 件暫時缺貨）${failed ? `，${failed} 件失敗` : ''}`);
+  return ok;
+}
+
 /* ---------------- 2. 惠康商品圖增量補 ---------------- */
 
 const OG_IMAGE = /(?:name|property)="og:image"\s+content="([^"]*)"/;
@@ -535,6 +633,10 @@ async function main() {
   if (hasFlag('skip-wellcome')) log('跳過惠康爬蟲（--skip-wellcome）');
   else await crawlWellcome({ pages, catLimit });
 
+  // 爬完先補：呢啲貨爬蟲本身見唔到，要靠 extra-skus.json 逐個開商品頁攞
+  if (hasFlag('skip-extras')) log('跳過補藏起嘅貨（--skip-extras）');
+  else await mergeExtras();
+
   // 百佳整份目錄要爬 ~37 分鐘，唔使每次都行；排程一日行一次就夠
   if (hasFlag('refresh-pns')) {
     log('順便重爬百佳目錄（--refresh-pns）…');
@@ -557,4 +659,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { crawlWellcome, fillImages, buildSnapshot };
+module.exports = { crawlWellcome, mergeExtras, fillImages, buildSnapshot };

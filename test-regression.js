@@ -508,6 +508,92 @@ const rankOf = (q, sku, opt) => search(q, { limit: 60, ...opt }).findIndex((p) =
     ok(/wellcome|parknshop|data\\\//.test(sw) || /data\//.test(sw), 'sw 冇處理快照');
   });
 
+  /* ---------- 9. 惠康藏起嘅缺貨貨品 ---------- */
+  group('9. 惠康藏起嘅缺貨貨品（extra-skus.json）');
+
+  const EXTRA = JSON.parse(fs.readFileSync('extra-skus.json', 'utf8'));
+  const extraList = EXTRA.wellcome || [];
+
+  await t('extra-skus.json 格式啱', () => {
+    ok(Array.isArray(extraList) && extraList.length, 'wellcome 陣列係空嘅');
+    for (const e of extraList) ok(/^\d{6,}$/.test(String(e.sku)), `sku 唔似 sku：${e.sku}`);
+    const dup = extraList.length - new Set(extraList.map((e) => String(e.sku))).size;
+    ok(dup === 0, `名單有 ${dup} 個重複 sku`);
+    return `${extraList.length} 件`;
+  });
+
+  await t('名單每一件都真係入咗快照', () => {
+    const miss = extraList.filter((e) => !wcItems.some((p) => String(p.sku) === String(e.sku)));
+    ok(!miss.length, `快照冇：${miss.map((e) => e.sku).join('、')}　→ 行 node build-snapshot.js --skip-wellcome --skip-images`);
+    return `${extraList.length}/${extraList.length}`;
+  });
+
+  await t('每件都有分類（分類瀏覽揀得到）', () => {
+    const bad = extraList
+      .map((e) => wcItems.find((p) => String(p.sku) === String(e.sku)))
+      .filter((p) => p && !p.catId);
+    ok(!bad.length, `冇 catId：${bad.map((p) => p.sku + ' ' + p.name).join('、')}`);
+  });
+
+  // 朋友 2026-09-07 報嘅兩款寬粉 —— 呢兩件係整套機制嘅由來，實要搵得返
+  for (const [sku, q, label] of [
+    ['101385212', '寬粉', '糧之髓手工鮮薯寬粉'],
+    ['113472784', '寬粉', '玖柒牌綠豆馬鈴薯寬粉'],
+    ['113472784', '馬鈴薯寬粉', '玖柒牌（全名搵）'],
+  ]) {
+    await t(`搵「${q}」搵得返 ${label}`, () => {
+      const r = rankOf(q, sku);
+      ok(r > 0, '搜尋結果入面完全冇佢');
+      ok(r <= 5, `排第 ${r}，跌出頭 5 名`);
+      return `第 ${r} 名`;
+    });
+  }
+
+  await t('缺貨貨品有標「暫時缺貨」', () => {
+    const two = ['101385212', '113472784'].map((s) => wcItems.find((p) => String(p.sku) === s));
+    ok(two.every(Boolean), '搵唔到嗰兩件');
+    const wrong = two.filter((p) => p.inStock !== false);
+    ok(!wrong.length, `${wrong.map((p) => p.sku).join('、')} 冇標缺貨 → 前端唔會出「暫時缺貨」`);
+  });
+
+  await t('「只睇有貨」預設係關（唔係嘅話缺貨貨會隱形）', () => {
+    const h = fs.readFileSync('public/index.html', 'utf8');
+    const m = /<input[^>]*id="stockOnly"[^>]*>/.exec(h);
+    ok(m, '搵唔到 #stockOnly');
+    ok(!/\bchecked\b/.test(m[0]), '預設剔咗，啲缺貨貨會即刻消失');
+  });
+
+  await t('build 流程真係會行 mergeExtras', () => {
+    const b = fs.readFileSync('build-snapshot.js', 'utf8');
+    ok(/module\.exports\s*=\s*{[^}]*mergeExtras/.test(b), 'mergeExtras 冇 export');
+    ok(/else await mergeExtras\(\)/.test(b), 'main() 冇叫 mergeExtras');
+    ok(require('./build-snapshot.js').mergeExtras, 'require 返出嚟冇 mergeExtras');
+  });
+
+  await t('搵唔到嘢嗰陣畀到條路出去', () => {
+    const a = fs.readFileSync('public/app.js', 'utf8');
+    ok(/empty-out/.test(a), 'app.js 冇 empty-out 區塊');
+    ok(/site:wellcome\.com\.hk/.test(a), '冇 Google 全站搜尋嘅出路');
+    const css = fs.readFileSync('public/style.css', 'utf8');
+    ok(/\.empty-out\b/.test(css), 'style.css 冇 .empty-out 樣式');
+  });
+
+  if (!OFFLINE) {
+    await t('名單啲貨喺惠康度仲開得到，價錢同快照一致', async () => {
+      const bad = [];
+      for (const e of extraList) {
+        const snap = wcItems.find((p) => String(p.sku) === String(e.sku));
+        let d;
+        try { d = await S.wellcome.detail(e.sku); }
+        catch (err) { bad.push(`${e.sku} 開唔到（${err.message}）`); continue; }
+        if (!d.name) { bad.push(`${e.sku} 冇名，可能落晒架`); continue; }
+        if (snap && d.price !== snap.price) bad.push(`${e.sku} 現場 $${d.price} ≠ 快照 $${snap.price}`);
+      }
+      if (bad.length) soft(bad.join('；') + '　→ 行返一次 build 就會同步');
+      return `${extraList.length}/${extraList.length} 啱`;
+    });
+  }
+
   /* ---------------- 總結 ---------------- */
   console.log(`\n${'═'.repeat(58)}`);
   if (fail === 0) {

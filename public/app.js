@@ -640,8 +640,19 @@ async function doSearch(q) {
     status.innerHTML = bits.join(' · ');
 
     if (!shown.length) {
+      /* 惠康「暫時缺貨」嘅貨唔會出現喺佢自己嘅分類列表同搜尋，所以我哋亦都爬唔到 ——
+         唯一搵得返嘅方法係 Google（朋友就係咁樣搵到兩款寬粉嘅）。
+         搵唔到嘢嗰陣畀返條路出去，好過畀人以為間鋪真係冇賣。 */
+      const gg = 'https://www.google.com/search?q=' + encodeURIComponent('site:wellcome.com.hk ' + q);
+      const wc = 'https://www.wellcome.com.hk/zh-hant/wellcome/search?keyword=' + encodeURIComponent(q);
       $('#findEmpty').hidden = false;
-      $('#findEmpty').innerHTML = '<div class="empty-art">🫧</div><p class="empty-title">搵唔到啱嘅嘢</p><p class="empty-sub">試下換個講法，或者放寬上面嘅篩選</p>';
+      $('#findEmpty').innerHTML = '<div class="empty-art">🫧</div>'
+        + '<p class="empty-title">搵唔到啱嘅嘢</p>'
+        + '<p class="empty-sub">試下換個講法，或者放寬上面嘅篩選</p>'
+        + '<p class="empty-sub empty-out">如果係暫時缺貨嘅貨品，惠康自己個網都唔會出佢<br>'
+        + '<a href="' + gg + '" target="_blank" rel="noopener">🔍 Google 搵惠康全站</a>'
+        + ' · <a href="' + wc + '" target="_blank" rel="noopener">去惠康網站搵</a><br>'
+        + '搵到嘅話話我知，我加返落去 💗</p>';
     }
     findPage = { q, page: 1 };
     // 靜態版所有貨已經喺手，「睇多啲」冇嘢可以攞，收埋佢

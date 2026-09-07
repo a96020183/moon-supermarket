@@ -279,6 +279,17 @@ main { padding: 16px 16px 120px; max-width: 1180px; margin: 0 auto; }
 .empty-title { font-size: 16px; font-weight: 750; color: var(--ink); margin: 0 0 6px; }
 .empty-sub { font-size: 14px; margin: 0; line-height: 1.65; }
 .empty .primary-btn { margin-top: 18px; }
+/* 搵唔到嘢先出嘅出路（缺貨貨品惠康自己都唔列出，要行返出去搵） */
+.empty-out {
+  margin-top: 16px; padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 13px; color: var(--ink-soft);
+}
+.empty-out a {
+  color: var(--pink-deep); font-weight: 600; text-decoration: none;
+  display: inline-block; padding: 6px 2px;      /* 手指撳得中 */
+}
+.empty-out a:active { opacity: .6; }
 
 /* ---------- 按鈕 ---------- */
 

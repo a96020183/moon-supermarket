@@ -363,6 +363,15 @@ async function wcDetail(sku) {
     else if (/sold-?out|out-of-stock|暫時缺貨|到貨通知/i.test(actions)) inStock = false;
   }
 
+  /* 商品頁個 __NUXT__ 有 categoryName（例如 "米粉/粉絲"）。
+     惠康列表爬唔到嘅缺貨貨品要靠呢個先知佢屬邊個分類 —— 對返分類樹個名就有 id。
+     注意 categoryId 係另一套內部編號（97489），同前端網址嗰套（101305）唔通用，所以認名唔認號。 */
+  let categoryName = null;
+  const cm = /categoryName:"((?:[^"\\]|\\.)*)"/.exec(html);
+  if (cm) {
+    try { categoryName = JSON.parse(`"${cm[1]}"`); } catch { categoryName = cm[1]; }
+  }
+
   return {
     sku: String(sku),
     name: og('og:title'),
@@ -371,6 +380,7 @@ async function wcDetail(sku) {
     spec: spec['規格'] || null,
     origin: spec['產地'] || null,
     storage: spec['儲存方式'] || null,
+    categoryName,
     inStock, promos,
   };
 }
