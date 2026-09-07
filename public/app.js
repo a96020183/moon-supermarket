@@ -1442,5 +1442,24 @@ async function bootStatic() {
     doSearch(q0);
   }
 
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+
+    /* 快照係「先出快取、背景攞新」—— 即係今次畫面用緊嘅隨時係舊料。
+       sw 攞到新嗰份會出聲，呢度就彈粒掣出嚟。撳一下 reload，
+       新嗰份已經落咗快取，秒開。
+       唔做呢步嘅話每次更新都要開兩次先追到（補完產地嗰次就係咁，
+       朋友一開，悅鮮活仲寫住「產地？」）。 */
+    let told = false;
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      if (!e.data || e.data.type !== 'snapshot-updated' || told) return;
+      told = true;                       // 三個檔各出一次，只彈一次就夠
+      const bar = $('#updateBar');
+      bar.hidden = false;
+      bar.addEventListener('click', () => {
+        bar.textContent = '更新緊…';
+        location.reload();
+      }, { once: true });
+    });
+  }
 })();

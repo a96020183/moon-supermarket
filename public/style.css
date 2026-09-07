@@ -450,6 +450,21 @@ main { padding: 16px 16px 120px; max-width: 1180px; margin: 0 auto; }
      冇呢行就會食咗下面卡片個 ♡ —— 撳完一件貨之後兩秒內都撳唔到隔籬嗰件。 */
   pointer-events: none;
 }
+
+/* 「有新資料」條掣。同 toast 唔同 —— 呢個係要人撳嘅，所以唔可以照抄
+   上面嗰行 pointer-events:none，而且唔會自己消失。擺喺 toast 上面少少，
+   兩樣同時出都唔會疊住。 */
+.update-bar {
+  position: fixed; left: 50%; bottom: calc(30px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  background: var(--pink-deep); color: #fff;
+  padding: 13px 22px; border-radius: 18px;
+  font-size: 14.5px; font-weight: 700; z-index: 95;
+  box-shadow: 0 10px 30px rgba(232, 70, 124, .42);
+  animation: pop .25s cubic-bezier(.2,.9,.3,1);
+  max-width: 88vw; text-align: center;
+}
+.update-bar:active { transform: translateX(-50%) scale(.95); }
 @keyframes pop { from { opacity: 0; transform: translate(-50%, 14px); } }
 
 .spinner {

@@ -512,6 +512,29 @@ const rankOf = (q, sku, opt) => search(q, { limit: 60, ...opt }).findIndex((p) =
     ok(/wellcome|parknshop|data\\\//.test(sw) || /data\//.test(sw), 'sw 冇處理快照');
   });
 
+  await t('快照換咗料會出聲（唔使開兩次先追到）', () => {
+    const sw = fs.readFileSync('public/sw.js', 'utf8');
+    const app = fs.readFileSync('public/app.js', 'utf8');
+    const html = fs.readFileSync('public/index.html', 'utf8');
+    const css = fs.readFileSync('public/style.css', 'utf8');
+    ok(/ETag/i.test(sw), 'sw 冇比對 ETag，唔知換咗料');
+    ok(/snapshot-updated/.test(sw), 'sw 攞到新料冇通知 client');
+    ok(/snapshot-updated/.test(app), 'app.js 冇聽');
+    ok(/id="updateBar"/.test(html), 'index.html 冇粒更新掣');
+    // 條 bar 係要撳嘅，唔可以好似 toast 咁 pointer-events:none
+    const i = css.indexOf('.update-bar');
+    ok(i > 0, 'style.css 冇 .update-bar');
+    ok(!/pointer-events:\s*none/.test(css.slice(i, i + 400)), '條更新掣撳唔到就冇意思');
+  });
+
+  await t('sw 快取版本有 bump（唔 bump 舊料唔會走）', () => {
+    const sw = fs.readFileSync('public/sw.js', 'utf8');
+    const m = /const SHELL = 'hkpb-shell-v(\d+)'/.exec(sw);
+    ok(m, '搵唔到 SHELL 版本號');
+    ok(Number(m[1]) >= 3, `SHELL 仲係 v${m[1]} —— 補完產地要 bump 先會掉走冇 origin 嗰份`);
+    return `hkpb-shell-v${m[1]}`;
+  });
+
   /* ---------- 9. 惠康藏起嘅缺貨貨品 ---------- */
   group('9. 惠康藏起嘅缺貨貨品（extra-skus.json）');
 
