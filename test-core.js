@@ -586,6 +586,67 @@ t('scoreItem 有 topId 就扣得返寵物分', () => {
   gt(plain, pet, `冇 topId ${plain} 分 / 有 topId ${pet} 分 —— 有 topId 應該扣返寵物分`);
 });
 
+/* ---------------- 7. 產地係咪中國 ---------------- */
+
+group('7. 產地判斷（「唔要中國產」個掣靠佢）');
+
+/* 呢啲字串全部由真實資料抄返嚟 —— 百佳 13,489 件有 206 種寫法。
+   唔好因為「睇落好似多餘」就剪走，每一條都係一種真係出現過嘅寫法。 */
+t('直白嘅中國寫法全部認得', () => {
+  for (const v of ['中國', '中国', 'China', 'CHINA', 'china',
+                   '中國深圳', '中國北京', '中國上海', 'China 中國', 'Packed in China']) {
+    ok(core.isChinaOrigin(v), `「${v}」應該當中國產`);
+  }
+});
+
+t('混住嘅寫法都當中國（寧可多隱一件）', () => {
+  for (const v of ['澳洲原料<br/>中國包裝', '香港/中國', '中國, 美國', '歐盟產品中國包裝',
+                   '台灣省, 中國', '中國/泰國', '智利／摩洛哥／中國／摩洛哥／南非']) {
+    ok(core.isChinaOrigin(v), `「${v}」有提中國，應該隱起`);
+  }
+});
+
+t('澳洲唔係澳門 —— 唔可以見到「澳」就當中國圈', () => {
+  for (const v of ['澳洲', '澳大利亞', '澳州', '澳洲亞拉河谷', '巴羅莎, 澳洲']) {
+    ok(!core.isChinaOrigin(v), `「${v}」係澳洲，唔係中國`);
+  }
+});
+
+t('港台日韓等等唔會誤中', () => {
+  for (const v of ['香港', '香港製造', 'Hong Kong', '台灣', 'Taiwan', '日本', '韓國',
+                   'New Zealand 紐西蘭', 'United States 美國', '泰國', 'Multi 多產地']) {
+    ok(!core.isChinaOrigin(v), `「${v}」唔應該當中國產`);
+  }
+});
+
+t('產地欄寫住廣告詞唔會誤中（「其中」有個中字）', () => {
+  ok(!core.isChinaOrigin('精選茉莉精華綻放其中，滋潤髮絲，一抹打造光澤貼服秀髮。'),
+    '「其中」唔係「中國」');
+  ok(!core.isChinaOrigin('圖片產區只供參考, 一切以實物為準'), '呢句唔係產地');
+});
+
+t('產地欄塞咗免責聲明 = 唔知，唔可以當真', () => {
+  // 惠康成 1,056 件係咁；照當產地顯示就會喺卡上出一粒廢話標籤
+  for (const v of ['圖片產區只供參考, 一切以實物為準', 'N/A', 'n/a', '詳情請參閱英文版本', '不適用']) {
+    eq(core.cleanOrigin(v), null, `「${v}」唔係產地`);
+    ok(!core.isChinaOrigin(v), `「${v}」更加唔係中國產`);
+  }
+});
+
+t('真地方名唔可以當垃圾洗走（唔准用長度判斷）', () => {
+  // 「United States 美國」18 個字，同免責聲明差唔多長 —— 用長度篩就會誤殺
+  for (const v of ['United States 美國', 'The Netherlands 荷蘭', 'Middle East 中東',
+                   '產地：香港/中國 (詳情請見包裝)', 'Rocher: 意大利, Raffaello: 波蘭, Rondnoir: 德國']) {
+    eq(core.cleanOrigin(v), v, `「${v}」係真產地，唔可以洗走`);
+  }
+  ok(!core.isChinaOrigin('Middle East 中東'), '「中東」有個中字但唔係中國');
+  ok(core.isChinaOrigin('產地：香港/中國 (詳情請見包裝)'), '呢個有提中國，要認得');
+});
+
+t('冇產地就係冇，唔可以當中國', () => {
+  for (const v of [null, undefined, '', '   ']) ok(!core.isChinaOrigin(v), `${JSON.stringify(v)} 應該係 false`);
+});
+
 /* ---------------- 總結 ---------------- */
 console.log(`\n${'─'.repeat(48)}`);
 if (fail === 0) {

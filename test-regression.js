@@ -496,10 +496,14 @@ const rankOf = (q, sku, opt) => search(q, { limit: 60, ...opt }).findIndex((p) =
 
   await t('index.html 有載 search-core（靜態版靠佢）', () => {
     const h = fs.readFileSync('public/index.html', 'utf8');
-    const iCore = h.indexOf('search-core.js');
-    const iApp = h.indexOf('app.js');
-    ok(iCore > 0, '冇載 search-core.js');
-    ok(iCore < iApp, 'search-core.js 要喺 app.js 之前載');
+    // 要夾實 <script src=…>，唔可以淨係 indexOf 個檔名 ——
+    // 註解入面提一句「app.js」都會令呢條測試無端端紅
+    const srcs = [...h.matchAll(/<script[^>]+src="([^"]+)"/g)].map((m) => m[1]);
+    const iCore = srcs.findIndex((s) => s.includes('search-core.js'));
+    const iApp = srcs.findIndex((s) => s.includes('app.js'));
+    ok(iCore >= 0, `冇載 search-core.js（載咗：${srcs.join('、')}）`);
+    ok(iApp >= 0, `冇載 app.js（載咗：${srcs.join('、')}）`);
+    ok(iCore < iApp, `search-core.js 要喺 app.js 之前載，而家次序係 ${srcs.join(' → ')}`);
   });
 
   await t('service worker 有快取快照', () => {
@@ -593,6 +597,84 @@ const rankOf = (q, sku, opt) => search(q, { limit: 60, ...opt }).findIndex((p) =
       return `${extraList.length}/${extraList.length} 啱`;
     });
   }
+
+  /* ---------- 10. 唔要中國產 ---------- */
+  group('10. 「唔要中國產」篩選');
+
+  const appJs = fs.readFileSync('public/app.js', 'utf8');
+  const idxHtml = fs.readFileSync('public/index.html', 'utf8');
+  const cssTxt = fs.readFileSync('public/style.css', 'utf8');
+
+  await t('search-core 有得判斷產地（前後端共用一套）', () => {
+    ok(typeof SC.isChinaOrigin === 'function', 'search-core 冇 export isChinaOrigin');
+    ok(SC.isChinaOrigin('China 中國') && !SC.isChinaOrigin('澳洲'), '判斷結果唔啱');
+  });
+
+  await t('個掣喺畫面度，而且預設冇剔', () => {
+    const m = /<input[^>]*id="noChina"[^>]*>/.exec(idxHtml);
+    ok(m, 'index.html 冇 #noChina');
+    ok(!/\bchecked\b/.test(m[0]), '唔應該一開機就幫人剔咗，要佢自己揀');
+  });
+
+  await t('篩選真係接咗落 applyFilters', () => {
+    ok(/noChina: \$\('#noChina'\)\.checked/.test(appJs), 'currentFilters 冇讀個掣');
+    ok(/if \(f\.noChina\)/.test(appJs), 'applyFilters 冇用到佢');
+    ok(/isChina\(p\)/.test(appJs), '冇叫產地判斷');
+  });
+
+  await t('個偏好會記住（唔使次次撳過）', () => {
+    ok(/store\.get\('noChina'/.test(appJs), '冇讀返上次嘅選擇');
+    ok(/store\.set\('noChina'/.test(appJs), '冇記低');
+  });
+
+  await t('產地會喺卡片同狀態列交代', () => {
+    ok(/function originPill/.test(appJs), '冇 originPill');
+    ok(/function filterNote/.test(appJs), '冇 filterNote（唔講就冇人知隱咗嘢）');
+    ok(/LAST_HIDDEN_CN/.test(appJs) && /LAST_UNKNOWN_ORIGIN/.test(appJs), '冇計隱咗幾多件');
+    for (const cls of ['.pill.origin', '.pill.origin-cn', '.pill.origin-unknown']) {
+      ok(cssTxt.includes(cls), `style.css 冇 ${cls}`);
+    }
+  });
+
+  await t('產地未知嘅唔會被一刀切隱起', () => {
+    // 惠康產地要逐件開商品頁補，補緊嗰陣大把未知 —— 連未知都隱就會成版空白
+    const seg = appJs.slice(appJs.indexOf('if (f.noChina)'), appJs.indexOf('if (f.noChina)') + 260);
+    ok(/if \(isChina\(p\)\)/.test(seg), '應該淨係隱「知道係中國」嗰啲');
+    ok(!/if \(!p\.origin\) return false/.test(seg), '唔可以連未知都隱埋');
+  });
+
+  await t('build 流程真係會補產地', () => {
+    const b = fs.readFileSync('build-snapshot.js', 'utf8');
+    ok(/module\.exports\s*=\s*{[^}]*fillOrigins/.test(b), 'fillOrigins 冇 export');
+    ok(/else await fillOrigins\(/.test(b), 'main() 冇叫 fillOrigins');
+    ok(/orig\[p\.sku\]/.test(b), 'buildSnapshot 冇將產地表併返落快照');
+    ok(/wcSpec|wellcome\.spec/.test(fs.readFileSync('lib-stores.js', 'utf8')), '規格解析冇抽出嚟共用');
+  });
+
+  await t('篩選喺真快照上面隱得啱（唔多唔少）', () => {
+    const all = [...wcItems, ...pnsItems];
+    const cn = all.filter((p) => SC.isChinaOrigin(p.origin));
+    const kept = all.filter((p) => !SC.isChinaOrigin(p.origin));
+    ok(cn.length > 0, '成份快照一件中國產都認唔到，實係接錯咗');
+    const leak = kept.filter((p) => /中國|中国|china/i.test(String(p.origin || '')));
+    ok(!leak.length, `漏網：${leak.slice(0, 3).map((p) => p.origin).join('、')}`);
+    const wrong = cn.filter((p) => /^(澳洲|澳大利亞|香港|台灣|日本|韓國)$/.test(String(p.origin || '')));
+    ok(!wrong.length, `錯殺：${wrong.slice(0, 3).map((p) => p.origin).join('、')}`);
+    return `隱 ${num(cn.length)} 件、留 ${num(kept.length)} 件`;
+  });
+
+  await t('產地覆蓋率（惠康補緊，只報數唔當錯）', () => {
+    // 要數「真係讀得出嘅產地」—— 數 p.origin 會連嗰千幾件免責聲明都當有，報到 100% 咁假
+    const wcK = wcItems.filter((p) => SC.cleanOrigin(p.origin)).length;
+    const pnsK = pnsItems.filter((p) => SC.cleanOrigin(p.origin)).length;
+    const pct = (a, b) => (a / b * 100).toFixed(0) + '%';
+    ok(pnsK / pnsItems.length > 0.8, `百佳產地覆蓋率跌到 ${pct(pnsK, pnsItems.length)}，佢個列表本身有，實係解析壞咗`);
+    if (wcK / wcItems.length < 0.9) {
+      soft(`惠康產地補到 ${pct(wcK, wcItems.length)}（${num(wcK)}/${num(wcItems.length)}）——`
+        + ' 未補完，未知嗰啲會照出並標「產地？」。再行 node build-snapshot.js --origins=5000 補多啲');
+    }
+    return `惠康 ${pct(wcK, wcItems.length)} · 百佳 ${pct(pnsK, pnsItems.length)}`;
+  });
 
   /* ---------------- 總結 ---------------- */
   console.log(`\n${'═'.repeat(58)}`);

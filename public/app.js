@@ -18,6 +18,8 @@ let SAVED = store.get('saved', []);
 let RECENT = store.get('recent', []);
 let BOOT = null;
 let LAST = [];            // 最近一次搜尋結果（畀篩選重畫用）
+let LAST_HIDDEN_CN = 0;      // 上次篩選隱起咗幾多件中國產（狀態列要講返俾人知）
+let LAST_UNKNOWN_ORIGIN = 0; // 同上：出咗嚟但產地仲未知嘅有幾多
 let CTX = 'find';         // find | cat | fav
 
 /* 搜尋核心（search-core.js）—— server 同靜態版共用同一套詞庫同評分 */
@@ -92,6 +94,7 @@ function cardHTML(p) {
       <div class="card-name">${esc(p.name)}</div>
       <div class="card-meta">
         ${p.sizeText ? `<span class="pill size">${esc(p.sizeText)}</span>` : ''}
+        ${originPill(p)}
         ${p.inStock === true ? '<span class="pill stock-yes">有貨</span>' : ''}
         ${p.inStock === false ? '<span class="pill stock-no">缺貨</span>' : ''}
         ${isPet(p) ? '<span class="pill pet">🐾 寵物</span>' : ''}
@@ -563,7 +566,38 @@ function currentFilters() {
     stockOnly: $('#stockOnly').checked,
     dealOnly: $('#dealOnly').checked,
     petOnly: $('#petOnly').checked,
+    noChina: $('#noChina').checked,
   };
+}
+
+/** 產地係咪中國圈（判斷本身喺 search-core，前後端共用一套） */
+const isChina = (p) => !!(SC && SC.isChinaOrigin && SC.isChinaOrigin(p.origin));
+
+/* 真係讀得出嘅產地。有成千件貨個產地欄塞咗句「圖片產區只供參考, 一切以實物為準」，
+   嗰啲當「唔知」—— 照擺上張卡就變咗一粒廢話標籤。 */
+const originOf = (p) => (SC && SC.cleanOrigin ? SC.cleanOrigin(p.origin) : (p.origin || null));
+
+/* 張卡上面嗰粒產地。
+   · 知道係中國 → 紅色，一眼睇到
+   · 知道唔係   → 淺色，寫個地方名（太長就剪短，例如「澳洲原料 中國包裝」）
+   · 唔知       → 淨係喺「唔要中國產」開住嗰陣先出「產地？」，
+                  平時唔好嘈住佢，成版問號好核突 */
+/* 「唔要中國產」開住嗰陣，狀態列要交代清楚 ——
+   隱咗幾多件、仲有幾多件未知產地。唔講嘅話佢會以為間鋪冇貨，
+   或者以為留低嗰啲全部保證唔係中國貨。 */
+function filterNote() {
+  if (!$('#noChina').checked) return '';
+  const bits = [];
+  if (LAST_HIDDEN_CN) bits.push(`隱咗 <b>${LAST_HIDDEN_CN}</b> 件中國產`);
+  if (LAST_UNKNOWN_ORIGIN) bits.push(`另有 ${LAST_UNKNOWN_ORIGIN} 件產地未知（照出咗）`);
+  return bits.length ? ' · ' + bits.join(' · ') : '';
+}
+
+function originPill(p) {
+  const o = originOf(p);
+  if (!o) return $('#noChina') && $('#noChina').checked ? '<span class="pill origin-unknown">產地？</span>' : '';
+  const short = o.replace(/\s*[,，/／]\s*/g, '·').slice(0, 14);
+  return `<span class="pill origin${isChina(p) ? ' origin-cn' : ''}">${esc(short)}</span>`;
 }
 
 /** 呢件貨係咪寵物用品（百佳 08 開頭、惠康貓貓／狗狗專區） */
@@ -577,11 +611,20 @@ function applyFilters(list) {
   // 「分類」入面已經係揀緊某一間超市嘅分類，唔可以再套搜尋嗰個店舖篩選，
   // 唔係就會出現「狀態寫住 160 件、但一張卡都冇」呢種自相矛盾。
   const byStore = CTX !== 'cat';
+  /* 「唔要中國產」只隱藏**知道係中國**嗰啲。產地未知嘅照出 ——
+     惠康嘅產地要逐件開商品頁先攞到，補緊嘅時候大把貨仲係未知，
+     一刀切隱埋未知就會成版空白，仲衰過冇個掣。未知嗰啲張卡會寫「產地？」。 */
+  LAST_HIDDEN_CN = 0;
+  LAST_UNKNOWN_ORIGIN = 0;
   const out = list.filter((p) => {
     if (byStore && f.store !== 'all' && p.store !== f.store) return false;
     if (f.stockOnly && p.inStock === false) return false;
     if (f.dealOnly && !p.discountPct) return false;
     if (f.petOnly && !isPet(p)) return false;
+    if (f.noChina) {
+      if (isChina(p)) { LAST_HIDDEN_CN++; return false; }
+      if (!originOf(p)) LAST_UNKNOWN_ORIGIN++;
+    }
     return true;
   });
 
@@ -610,7 +653,18 @@ function remember(products) {
 
 function redrawCurrent() {
   const target = CTX === 'cat' ? '#catResults' : CTX === 'fav' ? '#favResults' : '#results';
-  renderGrid($(target), applyFilters(CTX === 'fav' ? FAVS : LAST));
+  const shown = applyFilters(CTX === 'fav' ? FAVS : LAST);
+  renderGrid($(target), shown);
+
+  /* 重畫完一定要順手改返狀態列。之前淨係重畫格仔 —— 撳完「唔要中國產」
+     啲貨真係少咗，但上面仲寫住「搵到 4 件」，隱咗嘢又冇交代，
+     人哋只會以為個網壞咗。 */
+  const statusEl = CTX === 'cat' ? $('#catStatus') : CTX === 'fav' ? null : $('#findStatus');
+  if (statusEl) {
+    statusEl.innerHTML = CTX === 'cat'
+      ? `<b>${shown.length}</b> 件貨品${filterNote()}`
+      : `搵到 <b>${shown.length}</b> 件${filterNote()}`;
+  }
 }
 
 async function doSearch(q) {
@@ -637,7 +691,7 @@ async function doSearch(q) {
     const bits = [`搵到 <b>${shown.length}</b> 件`];
     if (r.queries && r.queries.length > 1) bits.push(`同埋幫你搵埋「${esc(r.queries.slice(1).join('、'))}」`);
     for (const n of r.notes || []) bits.push(esc(n.message));
-    status.innerHTML = bits.join(' · ');
+    status.innerHTML = bits.join(' · ') + filterNote();
 
     if (!shown.length) {
       /* 惠康「暫時缺貨」嘅貨唔會出現喺佢自己嘅分類列表同搜尋，所以我哋亦都爬唔到 ——
@@ -751,6 +805,12 @@ $('#storeSeg').addEventListener('click', (e) => {
   redrawCurrent();
 });
 for (const id of ['#sortSel', '#stockOnly', '#dealOnly']) $(id).addEventListener('change', redrawCurrent);
+/* 「唔要中國產」係長期立場，唔似其他篩選用完即棄 —— 記住佢，下次開返都仲喺度 */
+$('#noChina').checked = store.get('noChina', false);
+$('#noChina').addEventListener('change', (e) => {
+  store.set('noChina', e.target.checked);
+  redrawCurrent();
+});
 // 開咗「只睇寵物」就要重搵一次 —— 平時寵物貨會被壓低，唔重搵會漏咗好多
 $('#petOnly').addEventListener('change', () => {
   const q = $('#search').value.trim();
@@ -843,7 +903,7 @@ async function loadCategory(id, kind) {
     seeProducts(LAST);
     const shown = applyFilters(LAST);
     renderGrid($('#catResults'), shown);
-    $('#catStatus').innerHTML = shown.length ? `<b>${shown.length}</b> 件貨品`
+    $('#catStatus').innerHTML = shown.length ? `<b>${shown.length}</b> 件貨品` + filterNote()
       : (LAST.length ? '呢批貨畀上面嘅篩選隱藏晒，放寬啲試下。' : '呢個分類暫時攞唔到貨品，試下入面嘅細分類。');
     catPage = { id, kind: kind || 'c', page: 1 };
     $('#moreCat').hidden = STATIC.on || !LAST.length;
@@ -867,7 +927,7 @@ $('#moreCat').addEventListener('click', async (e) => {
     seeProducts(fresh);
     const shown2 = applyFilters(LAST);
     renderGrid($('#catResults'), shown2);
-    $('#catStatus').innerHTML = `<b>${shown2.length}</b> 件貨品`;
+    $('#catStatus').innerHTML = `<b>${shown2.length}</b> 件貨品` + filterNote();
   } catch (err) {
     toast('攞唔到：' + err.message);
   } finally {
@@ -1201,7 +1261,7 @@ async function openItem(p) {
 
   const specs = [
     ['規格', detail.spec || p.sizeText],
-    ['產地', detail.origin || p.origin],
+    ['產地', originOf(detail) || originOf(p)],
     ['儲存', detail.storage],
     ['有冇貨', detail.inStock === false ? '暫時缺貨' : detail.inStock === true ? '有貨' : (p.inStock === true ? '有貨' : p.inStock === false ? '暫時缺貨' : '未知')],
     ['促銷', (detail.promos || p.promos || []).join('、')],

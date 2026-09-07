@@ -322,6 +322,25 @@ async function wcCategory(id, page = 1) {
 }
 
 /** 逐件補資料：圖片、正式規格、產地、有冇貨、促銷標 */
+/**
+ * 商品頁嗰個「規格 / 產地 / 儲存方式」小表。
+ * 補產地嗰邊（build-snapshot fillOrigins）都要用同一段解析 —— 唔可以兩邊各寫一次，
+ * 一改就會靜靜哋唔同步。注意呢個表喺 926KB 頁面嘅第 ~757KB，唔係頭嗰橛。
+ */
+function wcSpec(html) {
+  const spec = {};
+  const si = html.indexOf('class="size-line"');
+  if (si < 0) return spec;
+  const seg = html.slice(si, si + 4000);
+  const re = /class="title"[^>]*>\s*([^<]{1,20}?)\s*<\/div>\s*<div class="value[^"]*"[^>]*>\s*([^<]{0,80}?)\s*</g;
+  let m;
+  while ((m = re.exec(seg)) !== null) {
+    const k = decodeEntities(m[1]), v = decodeEntities(m[2]);
+    if (k && v) spec[k] = v;
+  }
+  return spec;
+}
+
 async function wcDetail(sku) {
   const html = await fetchText(`${WC}/zh-hant/wellcome/p/x/i/${encodeURIComponent(sku)}.html`);
   const head = html.slice(0, 20000);
@@ -331,17 +350,7 @@ async function wcDetail(sku) {
     return m ? decodeEntities(m[1]) : null;
   };
 
-  const spec = {};
-  const si = html.indexOf('class="size-line"');
-  if (si >= 0) {
-    const seg = html.slice(si, si + 4000);
-    const re = /class="title"[^>]*>\s*([^<]{1,20}?)\s*<\/div>\s*<div class="value[^"]*"[^>]*>\s*([^<]{0,80}?)\s*</g;
-    let m;
-    while ((m = re.exec(seg)) !== null) {
-      const k = decodeEntities(m[1]), v = decodeEntities(m[2]);
-      if (k && v) spec[k] = v;
-    }
-  }
+  const spec = wcSpec(html);
 
   // 同款規格卡：class 含 active 嘅係當前商品；同時含 out-of-stock 就係暫時缺貨
   let inStock = null;
@@ -551,7 +560,7 @@ async function pnsProduct(code) {
 module.exports = {
   STORES, FetchError, fetchText, fetchHeadText, decodeEntities, money, decorate, ngState,
   wellcome: {
-    search: wcSearch, category: wcCategory, detail: wcDetail, parseCards: wcParseCards,
+    search: wcSearch, category: wcCategory, detail: wcDetail, parseCards: wcParseCards, spec: wcSpec,
     CATEGORIES: WC_CATEGORIES, categoryTree: wcCategoryTree, leafCategories: wcLeafCategories,
     nuxtState: wcNuxtState, CAT_FILE: WC_CAT_FILE,
   },

@@ -11,6 +11,11 @@ data/pns-index.json
 data/wc-index.json
 data/wc-images.json
 
+# 惠康產地對照 —— 同上，而且派出去嗰份 public/data/wellcome.json 每件貨
+# 都已經帶住 origin，CI 開工嗰陣 seedFromPublished() 會由佢砌返呢個檔。
+# 上咗只會令每次補產地都 commit 多 400KB 落 repo。
+data/wc-origin.json
+
 # 惠康分類樹快取 —— 由惠康首頁攞返嚟，過期自己再攞；
 # 派出去嗰份 public/data/meta.json 本身已經帶住成棵樹，所以呢個唔使上
 data/wc-categories.json

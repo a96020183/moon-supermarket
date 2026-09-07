@@ -244,6 +244,10 @@ main { padding: 16px 16px 120px; max-width: 1180px; margin: 0 auto; }
 .pill.promo { background: var(--lemon); color: #7A5410; }
 .pill.stock-yes { background: var(--mint-soft); color: #2E7D69; }
 .pill.stock-no { background: #FFE5E5; color: #C0392B; }
+/* 產地：普通地方淺色帶過，中國產要一眼認得出，未知就灰底問號 */
+.pill.origin { background: #EAF1FA; color: #3C5A80; }
+.pill.origin-cn { background: #FFE0E6; color: #B3234A; }
+.pill.origin-unknown { background: #F1EDEF; color: #A8949C; }
 
 .card-foot { display: flex; align-items: flex-end; gap: 8px; margin-top: auto; }
 .price-box { flex: 1; min-width: 0; }

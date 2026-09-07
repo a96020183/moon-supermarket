@@ -496,11 +496,41 @@
     return best;
   }
 
+  /* ---------------- 產地 ----------------
+   *
+   * 兩間超市寫產地嘅方法好散（實測百佳 13,489 件有 206 種寫法）：
+   *   「中國」「China」「CHINA」「中国」「中國深圳」「中國北京」
+   *   「澳洲原料<br/>中國包裝」「香港/中國」「歐盟產品中國包裝」「中國, 美國」…
+   *
+   * 所以認「中國 / 中国 / china」呢個詞，唔認個 prefix。兩個踩過嘅陷阱：
+   *   · 「澳洲」係 Australia，唔係澳門 —— 唔可以見到「澳」就當中國圈
+   *   · 有啲貨個產地欄寫住廣告詞（「精選茉莉精華綻放其中…」），「其中」有個「中」
+   *     但冇「中國」，所以夾成個詞就唔會誤中
+   *
+   * 「澳洲原料中國包裝」呢類都當中國 —— 佢話「唔想買中國嘅」，
+   * 寧可多隱一件，好過畀佢買咗先發現。個名照顯示返個產地全文，佢自己睇得到。
+   */
+  /* 有啲貨個「產地」欄其實冇填產地，塞咗句免責聲明落去（惠康成 1,056 件
+     寫「圖片產區只供參考, 一切以實物為準」）。呢啲當「唔知」處理 ——
+     照顯示出嚟就會變成張卡上面一粒廢話標籤。
+     要窄窄地認：唔可以用長度判斷，「United States 美國」都係 18 個字。 */
+  const ORIGIN_JUNK = /只供參考|以實物為準|詳情請參閱|^\s*n\s*\/?\s*a\s*$|^\s*不適用\s*$/i;
+  const cleanOrigin = (origin) => {
+    const s = String(origin == null ? '' : origin).trim();
+    return !s || ORIGIN_JUNK.test(s) ? null : s;
+  };
+
+  const CHINA = /中國|中国|china/i;
+  const isChinaOrigin = (origin) => {
+    const s = cleanOrigin(origin);
+    return !!s && CHINA.test(s);
+  };
+
   /** 常見搜尋詞（前端快速按鈕用） */
   const POPULAR = [
     '牛奶', '雞蛋', '麵包', '廁紙', '紙巾', '洗頭水', '米', '雞胸',
     '三文魚', '蕃茄', '香蕉', '雪糕', '薯片', '可樂', '洗衣液', '洗潔精',
   ];
 
-  return { RAW, synonyms, expandQuery, norm, headName, headRawOf, cleanHead, tokenize, scoreItem, hasCJK, POPULAR, isPetCat, isPetQuery };
+  return { RAW, synonyms, expandQuery, norm, headName, headRawOf, cleanHead, tokenize, scoreItem, hasCJK, POPULAR, isPetCat, isPetQuery, isChinaOrigin, cleanOrigin };
 }));

@@ -1,10 +1,14 @@
 'use strict';
 /* 靜態快照產生器 —— 出一份 public/data/ 出嚟，冇 server 都用得
  *
- * 做三件事：
- *   1. 惠康目錄爬蟲   → data/wc-index.json（同百佳嗰份 pns-index.json 平排，方便下次增量）
- *   2. 惠康商品圖增量補 → data/wc-images.json（{sku: 圖網址}），每次行有預算上限，唔會一次過狂打人哋
- *   3. 出快照         → public/data/{meta,wellcome,parknshop}.json
+ * 做五件事：
+ *   1. 惠康目錄爬蟲     → data/wc-index.json（同百佳嗰份 pns-index.json 平排，方便下次增量）
+ *   2. 補返列表見唔到嘅貨 → extra-skus.json 嗰批（惠康暫時缺貨嘅貨品唔會出現喺任何列表）
+ *   3. 惠康商品圖增量補   → data/wc-images.json（{sku: 圖網址}），讀頭 24KB 就收線
+ *   4. 惠康產地增量補     → data/wc-origin.json（{sku: 產地}），要成版落齊，所以預算細啲
+ *   5. 出快照           → public/data/{meta,wellcome,parknshop}.json
+ *
+ * 第 2、3、4 步都係增量：每次行有預算上限，排程行幾次就會儲齊，唔會一次過狂打人哋。
  *
  * 用法：
  *   node build-snapshot.js                 全套做
@@ -15,6 +19,9 @@
  *   node build-snapshot.js --pages=10       每個葉分類最多揭 10 版
  *   node build-snapshot.js --images=200     今次最多補 200 張圖（或者行 IMAGE_BUDGET=200）
  *   node build-snapshot.js --retry-images   連之前試過攞唔到圖嗰啲都再試一次
+ *   node build-snapshot.js --origins=600    今次最多補 600 件產地（或者行 ORIGIN_BUDGET=600）
+ *   node build-snapshot.js --skip-origins   唔補產地
+ *   node build-snapshot.js --retry-origins  連之前冇產地嗰啲都再試一次
  *   node build-snapshot.js --warn-mb=12     百佳嗰份大過幾多 MB 就出聲（預設 12）
  *
  * ⚠️ 百佳嗰份 data/pns-index.json 唔係呢度整嘅（rebuild-index.js 負責），
@@ -31,6 +38,7 @@ const DATA_DIR = path.join(__dirname, 'data');
 const OUT_DIR = path.join(__dirname, 'public', 'data');
 const WC_FILE = path.join(DATA_DIR, 'wc-index.json');
 const WC_IMG_FILE = path.join(DATA_DIR, 'wc-images.json');
+const WC_ORIGIN_FILE = path.join(DATA_DIR, 'wc-origin.json');
 const PNS_FILE = path.join(DATA_DIR, 'pns-index.json');
 
 const WC_ORIGIN = S.STORES.wellcome.origin;
@@ -82,6 +90,19 @@ async function seedFromPublished() {
       if (Object.keys(map).length) {
         writeJsonAtomic(WC_IMG_FILE, map);
         log(`由上一份快照 seed 返惠康圖片：${Object.keys(map).length} 張`);
+      }
+    }
+  }
+  /* 產地同圖片一樣要 seed 返 —— 唔係嘅話 CI 每 6 個鐘都由零開始，
+     一世補唔完（14,357 件要成粒半鐘），仲要每次白白掃人哋 3GB。 */
+  if (!fs.existsSync(WC_ORIGIN_FILE)) {
+    const prev = await readJsonSafe(outWc, null);
+    if (prev && prev.items && prev.items.length) {
+      const map = {};
+      for (const p of prev.items) if (p.origin) map[p.sku] = p.origin;
+      if (Object.keys(map).length) {
+        writeJsonAtomic(WC_ORIGIN_FILE, map);
+        log(`由上一份快照 seed 返惠康產地：${Object.keys(map).length} 件`);
       }
     }
   }
@@ -460,6 +481,98 @@ async function fillImages({ budget, retry }) {
 
 /* ---------------- 3. 出快照 ---------------- */
 
+/* ---------------- 2.5 惠康產地增量補 ---------------- */
+
+/**
+ * 產地淨係喺商品頁嗰個「規格／產地／儲存方式」小表度有，個表喺 926KB 頁面嘅
+ * 第 ~757KB —— 即係補圖嗰招（讀頭 24KB 就收線）攞唔到，一定要成版落齊。
+ * 好彩 gzip 之後一版得 233KB，而且實測 18/18 件都攞到，唔會白行。
+ *
+ * 同補圖一樣做增量：每次行 budget 件，排程行幾次就儲齊。
+ * wc-origin.json 入面：
+ *   "12345": "China 中國"  → 攞到
+ *   "12345": ""            → 試過，人哋真係冇寫（或者 404）；除非 --retry-origins 否則唔再試
+ *   冇呢個 key             → 未試過 / 上次超時，下次再試
+ *
+ * ⚠️ 百佳唔使行呢步 —— 佢個列表本身已經送埋產地上嚟（88% 有），rebuild-index 收咗。
+ */
+async function fillOrigins({ budget, retry }) {
+  const idx = await readJsonSafe(WC_FILE, { items: [] });
+  const items = idx.items || [];
+  if (!items.length) { log('惠康索引係空嘅，跳過補產地'); return {}; }
+
+  /* 同補圖一樣要排優先次序 —— 「唔要中國貨」個篩選最有用嘅係食落肚同搽上身嗰啲，
+     所以生鮮、肉、奶蛋、米麵行先，廚具旅行嗰啲排後。 */
+  const CAT_PRIORITY = [
+    '100011', // 水果及蔬菜
+    '100015', // 肉類及海鮮
+    '100007', // 乳製品・蛋・冷凍
+    '100010', // 急凍食品
+    '100020', // 米、油及麵
+    '100003', // 早餐及麵包
+    '100004', // 罐頭、醃製品及湯
+    '100005', // 調味料及醬料
+    '100016', // 母嬰用品
+    '100012', // 醫藥保健
+    '100000', // 個人護理
+    '100022', // 朱古力、薯片、零食
+    '100002', // 飲品
+    '189651', // 貓貓專區
+    '189941', // 狗狗專區
+    '100001', // 酒類
+    '100013', // 生活用品
+  ];
+  const rank = new Map(CAT_PRIORITY.map((id, i) => [id, i]));
+  const prio = (p) => {
+    const t = String(p.topId || p.catId);
+    return rank.has(t) ? rank.get(t) : 99;
+  };
+
+  const map = (await readJsonSafe(WC_ORIGIN_FILE, {})) || {};
+  const todo = items.filter((p) => {
+    const v = map[p.sku];
+    if (v === undefined) return true;
+    return retry && !v;
+  }).sort((a, b) => prio(a) - prio(b)).slice(0, budget);
+
+  const have = items.filter((p) => map[p.sku]).length;
+  log(`補產地：已經有 ${have}/${items.length} 件，今次補 ${todo.length} 件（預算 ${budget}）`);
+  if (!todo.length) return map;
+
+  let cursor = 0, done = 0, hit = 0, miss = 0, fail = 0;
+  const started = Date.now();
+
+  /* fetchHeadText 內部限住同時 4 條線。呢度每版 233KB（補圖果陣得 24KB），
+     所以只開 2 條，峰值大約同一個人揸住部電腦揭緊網頁差唔多。 */
+  const CONC = 2;
+  const MAX_BYTES = 1000000;           // 成版落齊（產地喺第 ~816KB）
+  async function worker() {
+    while (cursor < todo.length) {
+      const p = todo[cursor++];
+      try {
+        const html = await S.fetchHeadText(
+          `${WC_ORIGIN}/zh-hant/wellcome/p/x/i/${encodeURIComponent(p.sku)}.html`, MAX_BYTES, 30000);
+        const o = S.wellcome.spec(html)['產地'];
+        if (o) { map[p.sku] = o; hit++; } else { map[p.sku] = ''; miss++; }
+      } catch (e) {
+        if (e.status >= 400 && e.status < 500) { map[p.sku] = ''; miss++; } else fail++;
+      }
+      done++;
+      if (done % 50 === 0) {
+        writeJsonAtomic(WC_ORIGIN_FILE, map);
+        const per = (Date.now() - started) / done;
+        const left = Math.round(per * (todo.length - done) / 60000);
+        log(`  補產地 ${done}/${todo.length}（攞到 ${hit}、冇寫 ${miss}、失敗 ${fail}）估計仲有 ${left} 分鐘`);
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: CONC }, worker));
+
+  writeJsonAtomic(WC_ORIGIN_FILE, map);
+  log(`補產地完成：攞到 ${hit}、冇寫 ${miss}、失敗 ${fail}，用咗 ${Math.round((Date.now() - started) / 1000)} 秒`);
+  return map;
+}
+
 /** 單價入面 kind 前端唔用，剩返 {value, per, text}；value 唔使咁多個位，慳啲字數 */
 function slimUnitPrice(u) {
   if (!u || !isFinite(u.value)) return null;
@@ -527,10 +640,13 @@ async function buildSnapshot() {
   /* --- 惠康 --- */
   const wcIdx = await readJsonSafe(WC_FILE, { items: [] });
   const imgs = (await readJsonSafe(WC_IMG_FILE, {})) || {};
+  const orig = (await readJsonSafe(WC_ORIGIN_FILE, {})) || {};
   const wcItems = (wcIdx.items || [])
     .filter((p) => p && p.sku && p.price > 0)
-    .map((p) => shape(p, { store: 'wellcome', image: imgs[p.sku] || p.image,
-      catId: p.catId, topId: p.topId, catIds: p.catIds, topIds: p.topIds }));
+    // 產地表贏過索引入面嗰個（索引嗰個淨係 extra-skus 嗰幾件先有）
+    .map((p) => shape(orig[p.sku] ? { ...p, origin: orig[p.sku] } : p,
+      { store: 'wellcome', image: imgs[p.sku] || p.image,
+        catId: p.catId, topId: p.topId, catIds: p.catIds, topIds: p.topIds }));
 
   /* --- 百佳（讀 rebuild-index.js 整嗰份，唔會寫佢） --- */
   const pnsIdx = await readJsonSafe(PNS_FILE, { items: [] });
@@ -627,6 +743,7 @@ async function main() {
   const pages = optNum('pages', 40);
   const catLimit = optNum('cats', 0);
   const budget = optNum('images', Number(process.env.IMAGE_BUDGET) || 800);
+  const originBudget = optNum('origins', Number(process.env.ORIGIN_BUDGET) || 600);
 
   await seedFromPublished();          // CI 度冇 data/，由上一份快照還原，唔好整散啲貨
 
@@ -649,6 +766,9 @@ async function main() {
   if (hasFlag('skip-images')) log('跳過補圖（--skip-images）');
   else await fillImages({ budget, retry: hasFlag('retry-images') });
 
+  if (hasFlag('skip-origins')) log('跳過補產地（--skip-origins）');
+  else await fillOrigins({ budget: originBudget, retry: hasFlag('retry-origins') });
+
   await buildSnapshot();
 }
 
@@ -659,4 +779,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { crawlWellcome, mergeExtras, fillImages, buildSnapshot };
+module.exports = { crawlWellcome, mergeExtras, fillImages, fillOrigins, buildSnapshot };

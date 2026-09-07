@@ -20,6 +20,10 @@ on:
         description: '今次最多補幾多張惠康商品圖'
         type: string
         default: '1200'
+      origins:
+        description: '今次最多補幾多件惠康產地（「唔要中國產」個掣靠佢）'
+        type: string
+        default: '800'
 
 # 要寫返個 commit 入 repo，所以要 write。
 permissions:
@@ -58,9 +62,10 @@ jobs:
         env:
           MANUAL_FULL: ${{ github.event.inputs.full }}
           MANUAL_IMAGES: ${{ github.event.inputs.images }}
+          MANUAL_ORIGINS: ${{ github.event.inputs.origins }}
         run: |
           HOUR=$(date -u +%H)
-          ARGS="--images=${MANUAL_IMAGES:-1200}"
+          ARGS="--images=${MANUAL_IMAGES:-1200} --origins=${MANUAL_ORIGINS:-800}"
           if [ "$HOUR" = "18" ] || [ "$MANUAL_FULL" = "true" ]; then
             ARGS="$ARGS --refresh-pns"
             echo "→ 今次連百佳整份目錄一齊重爬"
@@ -110,6 +115,7 @@ jobs:
             echo ""
             if [ -f public/data/meta.json ]; then
               node -e "const m=require('./public/data/meta.json');console.log('- 抓到時間（UTC）：'+new Date(m.builtAt).toISOString());console.log('- 惠康：'+m.counts.wellcome+' 件');console.log('- 百佳：'+m.counts.parknshop+' 件');"
+              node -e "const w=require('./public/data/wellcome.json').items,p=require('./public/data/parknshop.json').items;const pc=(a,b)=>(a/b*100).toFixed(0)+'%';console.log('- 產地覆蓋：惠康 '+pc(w.filter(x=>x.origin).length,w.length)+'、百佳 '+pc(p.filter(x=>x.origin).length,p.length));"
             else
               echo "- ⚠️ 冇砌到 public/data/meta.json"
             fi
