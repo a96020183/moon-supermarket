@@ -4,6 +4,8 @@
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const api = (p) => fetch(p).then((r) => r.json());
+const THEME_KEY = 'hkpb.theme';
+const THEME_COLOR = { light: '#FFF8F6', dark: '#17131B' };
 
 /* ---------------- 本機儲存 ---------------- */
 
@@ -35,6 +37,68 @@ const STATIC = {
 };
 
 const saveAll = () => { store.set('list', LIST); store.set('favs', FAVS); store.set('saved', SAVED); store.set('recent', RECENT); };
+
+/* ---------------- 主題 ---------------- */
+
+const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+
+function savedTheme() {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    return v === 'dark' || v === 'light' ? v : '';
+  } catch {
+    return '';
+  }
+}
+
+function systemTheme() {
+  return themeMedia && themeMedia.matches ? 'dark' : 'light';
+}
+
+function currentTheme() {
+  return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+}
+
+function syncThemeToggle() {
+  const btn = $('#toggleTheme');
+  if (!btn) return;
+  const dark = currentTheme() === 'dark';
+  const icon = $('.theme-btn-icon', btn);
+  const label = $('.theme-btn-label', btn);
+  if (icon) icon.textContent = dark ? '☀️' : '🌙';
+  if (label) label.textContent = dark ? '日間' : '黑夜';
+  btn.setAttribute('aria-pressed', String(dark));
+  btn.setAttribute('aria-label', dark ? '而家係黑夜模式，撳一下轉做日間模式' : '而家係日間模式，撳一下轉做黑夜模式');
+}
+
+function applyTheme(theme, persist) {
+  const next = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = next;
+  document.documentElement.style.colorScheme = next;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', THEME_COLOR[next]);
+  if (persist) {
+    try { localStorage.setItem(THEME_KEY, next); } catch {}
+  }
+  syncThemeToggle();
+}
+
+function initTheme() {
+  applyTheme(savedTheme() || currentTheme() || systemTheme(), false);
+  $('#toggleTheme').addEventListener('click', () => {
+    const next = currentTheme() === 'dark' ? 'light' : 'dark';
+    applyTheme(next, true);
+    haptic();
+    toast(next === 'dark' ? '已轉做黑夜模式' : '已轉做日間模式');
+  });
+  if (themeMedia) {
+    const onThemeChange = () => {
+      if (!savedTheme()) applyTheme(systemTheme(), false);
+    };
+    if (themeMedia.addEventListener) themeMedia.addEventListener('change', onThemeChange);
+    else if (themeMedia.addListener) themeMedia.addListener(onThemeChange);
+  }
+}
 
 /* ---------------- 細工具 ---------------- */
 
@@ -1074,7 +1138,7 @@ function showCopyBox(text) {
   $('#itemSheetBody').innerHTML = `
     <h3 class="sheet-title">📋 複製清單</h3>
     <p class="sheet-note">長按下面段字揀「全選 → 複製」就得。</p>
-    <textarea rows="10" style="width:100%;border:2px solid var(--line);border-radius:16px;padding:13px;background:#fff">${esc(text)}</textarea>`;
+    <textarea rows="10" style="width:100%;border:2px solid var(--line);border-radius:16px;padding:13px;background:var(--card);color:var(--ink)">${esc(text)}</textarea>`;
   const ta = $('#itemSheetBody textarea');
   ta.focus(); ta.select();
 }
@@ -1096,10 +1160,10 @@ async function listCompare() {
         ? (row.wellcome.price <= row.parknshop.price ? 'wellcome' : 'parknshop') : null;
       const cell = (p, key) => p
         ? `<div style="flex:1"><div style="font-size:12px;color:var(--ink-soft)">${p.storeName}${cheap === key ? ' ✅' : ''}</div>
-           <div style="font-weight:800;color:${cheap === key ? '#2E7D69' : 'var(--ink)'}">$${fmt(p.price)} ×${q} = $${fmt(p.price * q)}</div>
+           <div style="font-weight:800;color:${cheap === key ? 'var(--success)' : 'var(--ink)'}">$${fmt(p.price)} ×${q} = $${fmt(p.price * q)}</div>
            <div style="font-size:11.5px;color:var(--ink-soft)">${esc(p.name.slice(0, 22))}</div></div>`
         : '<div style="flex:1;color:var(--ink-soft);font-size:12.5px">呢間搵唔到</div>';
-      return `<div style="background:#fff;border-radius:16px;padding:12px;margin-bottom:9px">
+      return `<div style="background:var(--card);border-radius:16px;padding:12px;margin-bottom:9px">
         <div style="font-weight:700;font-size:14px;margin-bottom:7px">${esc(row.name)}</div>
         <div style="display:flex;gap:12px">${cell(row.wellcome, 'wellcome')}${cell(row.parknshop, 'parknshop')}</div>
       </div>`;
@@ -1274,7 +1338,7 @@ async function openItem(p) {
     <div class="spec-list">${specs.map(([k, v]) => `<div class="spec-row"><span>${k}</span><span>${esc(v)}</span></div>`).join('')}</div>
     ${hist.points && hist.points.length > 1 ? `
       <h3 style="font-size:15px;margin:18px 0 6px">價格走勢</h3>
-      <div style="background:#fff;border-radius:16px;padding:12px">
+      <div style="background:var(--card);border-radius:16px;padding:12px">
         ${sparkline(hist.points)}
         <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink-soft);margin-top:6px">
           <span>睇過最低 $${fmt(hist.min)}</span><span>最高 $${fmt(hist.max)}</span></div>
@@ -1286,8 +1350,8 @@ async function openItem(p) {
         <div class="li-main"><div class="li-name">${esc(m.name)}</div>
           <div class="li-sub"><span class="badge store-${m.store}" style="padding:1px 7px">${m.storeName}</span>
           ${m.sizeText ? `<span>${esc(m.sizeText)}</span>` : ''}
-          ${m.price < p.price ? `<span style="color:#2E7D69;font-weight:700">平 $${fmt(p.price - m.price)}</span>`
-            : m.price > p.price ? `<span style="color:#C0392B">貴 $${fmt(m.price - p.price)}</span>` : '<span>一樣價</span>'}</div>
+          ${m.price < p.price ? `<span style="color:var(--success);font-weight:700">平 $${fmt(p.price - m.price)}</span>`
+            : m.price > p.price ? `<span style="color:var(--danger)">貴 $${fmt(m.price - p.price)}</span>` : '<span>一樣價</span>'}</div>
         </div>
         <div class="li-price">$${fmt(m.price)}</div>
         <button class="add-btn ${inList(m.id) ? 'in' : ''}" data-act="add">${inList(m.id) ? '✓' : '＋'}</button>
@@ -1419,6 +1483,7 @@ async function bootStatic() {
   refreshCounts();
   renderList();
   renderFavs();
+  initTheme();
   try {
     BOOT = await api('/api/bootstrap');
   } catch {

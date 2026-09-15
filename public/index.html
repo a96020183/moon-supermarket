@@ -11,6 +11,21 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
+<script>
+(() => {
+  const KEY = 'hkpb.theme';
+  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  let theme = prefersDark ? 'dark' : 'light';
+  try {
+    const saved = localStorage.getItem(KEY);
+    if (saved === 'dark' || saved === 'light') theme = saved;
+  } catch {}
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.style.colorScheme = theme;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', theme === 'dark' ? '#17131B' : '#FFF8F6');
+})();
+</script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -24,10 +39,16 @@
         <p class="brand-sub">惠康 × 百佳 · 邊間平啲一眼睇晒</p>
       </div>
     </div>
-    <button class="list-btn" id="openList" aria-label="打開購物清單">
-      <span class="list-btn-icon">🛍️</span>
-      <span class="list-badge" id="listBadge" hidden>0</span>
-    </button>
+    <div class="topbar-actions">
+      <button class="theme-btn" id="toggleTheme" type="button" aria-label="切換黑夜模式">
+        <span class="theme-btn-icon" aria-hidden="true">🌙</span>
+        <span class="theme-btn-label">黑夜</span>
+      </button>
+      <button class="list-btn" id="openList" aria-label="打開購物清單">
+        <span class="list-btn-icon">🛍️</span>
+        <span class="list-badge" id="listBadge" hidden>0</span>
+      </button>
+    </div>
   </div>
 
   <div class="searchwrap">
